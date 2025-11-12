@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
-    // const optimize = b.standardOptimizeOption(.{});
+    const optimize = b.standardOptimizeOption(.{});
 
     // Allow an optional CLI parameter: `zig build utilname=<name>`
     const util_opt = b.option([]const u8, "utilname", "Build only a single utility");
@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) !void {
             .name = name,
             .root_module = b.createModule(.{
                 .root_source_file = b.path(std.fmt.allocPrint(b.allocator, "src/{s}", .{entry.name}) catch unreachable),
+                .optimize = optimize,
                 .target = target,
             }),
         });
