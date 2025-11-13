@@ -1,44 +1,27 @@
-//   -n     do not output the trailing newline
+//  echo.zig, write a line of text to stdout
+//  Copyright (C) 2025 Bogdan Rareș-Andrei
 //
-//   -e     enable interpretation of backslash escapes
+//  This program is free software: you can redistribute it and/or modify
+//  it under the terms of the GNU General Public License as published by
+//  the Free Software Foundation, either version 3 of the License, or
+//  (at your option) any later version.
 //
-//   -E     disable interpretation of backslash escapes (default)
+//  This program is distributed in the hope that it will be useful,
+//  but WITHOUT ANY WARRANTY; without even the implied warranty of
+//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//  GNU General Public License for more details.
 //
-//   --help display this help and exit
+//  You should have received a copy of the GNU General Public License
+//  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
-//   --version
-//          output version information and exit
-//
-//   If -e is in effect, the following sequences are recognized:
-//
-//   \\     backslash
-//
-//   \a     alert (BEL)
-//
-//   \b     backspace
-//
-//   \c     produce no further output
-//
-//   \e     escape
-//
-//   \f     form feed
-//
-//   \n     new line
-//
-//   \r     carriage return
-//
-//   \t     horizontal tab
-//
-//   \v     vertical tab
-//
-//   \0NNN  byte with octal value NNN (1 to 3 digits)
-//
-//   \xHH   byte with hexadecimal value HH (1 to 2 digits)
 const std = @import("std");
 const posix = std.posix;
 
 pub fn main() !void {
     const STDOUT = 1;
+
+    posix.write(STDOUT, "WARNING: This 'echo' implementation is incomplete!\n");
+
     const allocator = std.heap.page_allocator;
 
     const all_args = try std.process.argsAlloc(allocator);

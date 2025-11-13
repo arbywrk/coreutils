@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) !void {
     // Allow an optional CLI parameter: `zig build utilname=<name>`
     const util_opt = b.option([]const u8, "utilname", "Build only a single utility");
 
-    // Read directory contents of src/
+    // Read from src/
     const src_dir = std.fs.cwd().openDir("src", .{ .iterate = true }) catch {
         std.debug.print("src directory missing\n", .{});
         return;
