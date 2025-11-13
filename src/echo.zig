@@ -38,6 +38,7 @@ const std = @import("std");
 const posix = std.posix;
 
 pub fn main() !void {
+    const STDOUT = 1;
     const allocator = std.heap.page_allocator;
 
     const all_args = try std.process.argsAlloc(allocator);
@@ -59,7 +60,7 @@ pub fn main() !void {
     if (args.len == 0) {
         // default print nothing
         if (add_new_line) {
-            _ = try posix.write(1, "\n");
+            _ = try posix.write(STDOUT, "\n");
         }
         return;
     } else {
@@ -89,7 +90,7 @@ pub fn main() !void {
             line_buffer[pos] = '\n';
         }
 
-        _ = try posix.write(1, line_buffer);
+        _ = try posix.write(STDOUT, line_buffer);
         return;
     }
 }

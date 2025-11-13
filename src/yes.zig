@@ -3,7 +3,7 @@ const posix = std.posix;
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
-    const STDOUT_FD = 1;
+    const STDOUT = 1;
 
     // Setup stderr with small buffer (only for errors)
     var stderr_buffer: [256]u8 = undefined;
@@ -21,7 +21,7 @@ pub fn main() !void {
                 const ver_mes = "{s}: 1.0.0\n";
                 const ver_str = try std.fmt.allocPrint(allocator, ver_mes, .{args[0]});
                 defer allocator.free(ver_str);
-                _ = try posix.write(STDOUT_FD, ver_str);
+                _ = try posix.write(STDOUT, ver_str);
                 return;
             } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
                 const usage =
@@ -33,7 +33,7 @@ pub fn main() !void {
                     \\  -v, --version   Output version information and exit
                     \\
                 ;
-                _ = try posix.write(STDOUT_FD, usage);
+                _ = try posix.write(STDOUT, usage);
                 return;
             } else {
                 try stderr.print("{s}: Invalid option: {s}\nTry '{s} --help' for more information.\n", .{ args[0], arg, args[0] });
@@ -82,6 +82,6 @@ pub fn main() !void {
     // Write repeatedly
     const slice = block[0..block_len];
     while (true) {
-        _ = try posix.write(STDOUT_FD, slice);
+        _ = try posix.write(STDOUT, slice);
     }
 }
