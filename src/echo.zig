@@ -17,30 +17,81 @@
 const std = @import("std");
 const posix = std.posix;
 
+const VERSION = "1.0.0";
+
 pub fn main() !void {
     const STDOUT = 1;
-
-    posix.write(STDOUT, "WARNING: This 'echo' implementation is incomplete!\n");
+    // const STDERR = 2;
 
     const allocator = std.heap.page_allocator;
 
     const all_args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, all_args);
 
+    const program_name = all_args[0];
     const args = all_args[1..];
 
-    // disabled by the -n flag
-    const add_new_line: bool = true;
-
-    // handle falgs
-    for (args) |arg| {
+    // handle meta-flags
+    if (args.len > 0) {
+        const arg = args[0];
         if (std.mem.startsWith(u8, arg, "-")) {
-            // TODO: handle flags
-            return;
+            if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+                const usage_foramt =
+                    \\Usage: {s} [options...] [string...]
+                    \\       {s} <option>
+                    \\
+                    \\Options:
+                    \\  -h, --help        Display this help and exit (must be first)
+                    \\  -v, --version     Output version information and exit (must be first)
+                    \\
+                    \\  -n, --no-newline  Do not output the trailing newline
+                    \\
+                ;
+                const usage_str = try std.fmt.allocPrint(allocator, usage_foramt, .{ program_name, program_name });
+                defer allocator.free(usage_str);
+                _ = try posix.write(STDOUT, usage_str);
+                return;
+            }
+
+            if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
+                const version_format = "{s}: {s}\n";
+                const version_str = try std.fmt.allocPrint(allocator, version_format, .{ program_name, VERSION });
+                defer allocator.free(version_str);
+                _ = try posix.write(STDOUT, version_str);
+                return;
+            }
         }
     }
 
-    if (args.len == 0) {
+    // enabled by -e, disabled by -E
+    const handle_escape_seq = false;
+    _ = handle_escape_seq; // disable not-used warning
+
+    // disabled by the -n flag
+    var add_new_line: bool = true;
+
+    var nr_of_flags: u8 = 0;
+
+    // handle option flags
+    for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, "-")) {
+            if (std.mem.eql(u8, arg, "-n") or std.mem.eql(u8, arg, "--no-newline")) {
+                add_new_line = false;
+                nr_of_flags += 1;
+                continue;
+            }
+
+            // unknown flags are ignored and interpreted as a string
+            break;
+        } else {
+            // no more flags should be passed after the first non flag argument
+            break;
+        }
+    }
+
+    const args_with_no_flags = args[nr_of_flags..];
+
+    if (args_with_no_flags.len == 0) {
         // default print nothing
         if (add_new_line) {
             _ = try posix.write(STDOUT, "\n");
@@ -48,8 +99,8 @@ pub fn main() !void {
         return;
     } else {
         var total_len: usize = 0;
-        for (args) |arg| total_len += arg.len;
-        total_len += args.len - 1; // spaces
+        for (args_with_no_flags) |arg| total_len += arg.len;
+        total_len += args_with_no_flags.len - 1; // spaces
 
         if (add_new_line) {
             total_len += 1;
@@ -60,11 +111,10 @@ pub fn main() !void {
         defer allocator.free(line_buffer);
 
         var pos: usize = 0;
-        for (args, 0..) |arg, i| {
-            // if (std.mem.startsWith(u8, arg, "-")) continue;
+        for (args_with_no_flags, 0..) |arg, i| {
             @memcpy(line_buffer[pos..][0..arg.len], arg);
             pos += arg.len;
-            if (i < args.len - 1) {
+            if (i < args_with_no_flags.len - 1) {
                 line_buffer[pos] = ' ';
                 pos += 1;
             }
