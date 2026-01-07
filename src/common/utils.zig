@@ -19,3 +19,30 @@ const std = @import("std");
 pub fn basename(path: []const u8) []const u8 {
     return std.fs.path.basename(path);
 }
+
+pub fn dirname(path: []const u8) ?[]const u8 {
+    const len = path.len;
+    if (len == 0) return "."; // empty string → "."
+
+    // strip trailing slashes
+    var end: usize = len;
+    while (end > 0 and path[end - 1] == '/') : (end -= 1) {}
+
+    if (end == 0) return "/"; // path was all slashes
+
+    // find last slash before 'end'
+    var i: isize = @as(isize, @intCast(end)) - 1;
+    while (i >= 0) : (i -= 1) {
+        if (path[@as(usize, @intCast(i))] == '/') break;
+    }
+
+    if (i < 0) return "."; // no slash found → current dir
+
+    // skip any trailing slashes in the result
+    var dir_end: usize = @as(usize, @intCast(i));
+    while (dir_end > 0 and path[dir_end - 1] == '/') : (dir_end -= 1) {}
+
+    if (dir_end == 0) return "/"; // root
+
+    return path[0..dir_end];
+}

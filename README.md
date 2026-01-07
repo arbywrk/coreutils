@@ -3,9 +3,10 @@
 A reimplementation of the *GNU coreutils* in _*Zig*_. This is a work in progress.
 
 ## Available Utilities
-- echo
-- yes
+- echo (incomplete)
+- yes (needs memory fixes)
 - hostname (no flags)
+- rmdir
 - true
 - false
 

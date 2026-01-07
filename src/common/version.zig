@@ -20,7 +20,7 @@ const std = @import("std");
 pub const VERSION: []const u8 = "0.1.0";
 
 // name of the package
-pub const PACKAGE = "zig-coreutils";
+pub const PACKAGE = "arbys-coreutils";
 
 /// prints: "<progname> (<package>) <version>"
 pub fn printVersion(w: *std.Io.Writer, program_name: []const u8) !void {
