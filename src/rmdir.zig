@@ -23,15 +23,11 @@ const version = @import("common/version.zig");
 const arguments = @import("common/args.zig");
 const errors = @import("common/errors.zig");
 const Args = arguments.Args;
-
-// TODO: Consider adding proper exit codes as constants for better maintainability
-// const EXIT_SUCCESS: u8 = 0;
-// const EXIT_FAILURE: u8 = 1;
+const EXIT_SUCCESS = @import("common/config.zig").EXIT_SUCCESS;
+const EXIT_FAILURE = @import("common/config.zig").EXIT_FAILURE;
+const io = @import("common/io.zig");
 
 pub fn main() !u8 {
-    // TODO: These writer patterns are verbose. Consider a helper function or wrapper:
-    // const io = try utils.getStdIO();
-    // Then use io.stdout, io.stderr
     var stdout_writer = fs.File.stdout().writer(&.{});
     var stderr_writer = fs.File.stderr().writer(&.{});
     const stdout = &stdout_writer.interface;
@@ -48,12 +44,10 @@ pub fn main() !u8 {
             .long = "ignore-fail-on-non-empty",
             .help = "ignore each failure that is solely because a directory is non-empty",
         },
-        // TODO: Consider adding .short = 'h' for --help (common convention)
         .{
             .long = "help",
             .help = "display this help and exit",
         },
-        // TODO: Consider adding .short = 'V' for --version (common convention)
         .{
             .long = "version",
             .help = "output version information and exit",
@@ -66,7 +60,7 @@ pub fn main() !u8 {
 
     var args = try Args.init(&specs);
     const program_name = args.programName();
-    var argsIt = try args.iterator();
+    var argsIt = try args.iteratorInit();
 
     // Process options.
     // TODO: The error handling pattern is repetitive. Consider extracting to a helper function:
@@ -92,53 +86,37 @@ pub fn main() !u8 {
                 );
             },
         }
-        return 1;
+        return EXIT_FAILURE;
     }) |opt| {
-        // TODO: This pattern could be simplified with a helper. Consider:
-        // if (opt.isLong("help")) { ... }
-        // if (opt.isShort('p')) { ... }
-        if (opt.spec.long) |l| {
-            if (std.mem.eql(u8, l, "help")) {
-                try printHelp(stdout, program_name, &specs);
-                return 0;
-            }
-            if (std.mem.eql(u8, l, "version")) {
-                try version.printVersion(stdout, program_name);
-                return 0;
-            }
-            if (std.mem.eql(u8, l, "ignore-fail-on-non-empty")) {
-                ignore_non_empty = true;
-                continue;
-            }
+        // handle long options
+        if (opt.isLong("help")) {
+            try printHelp(stdout, program_name, &specs);
+            return EXIT_SUCCESS;
+        }
+        if (opt.isLong("version")) {
+            try version.printVersion(stdout, program_name);
+            return EXIT_SUCCESS;
+        }
+        if (opt.isLong("ignore-fail-on-non-empty")) {
+            ignore_non_empty = true;
+            continue;
         }
 
         // Handle short options
-        if (opt.spec.short) |c| {
-            switch (c) {
-                'p' => remove_parents = true,
-                'v' => verbose = true,
-                // TODO: The else branch is unnecessary if all short options are handled above.
-                // If a short option exists in specs but isn't handled here, that's a bug.
-                // Consider adding a compile-time assertion or at least an unreachable.
-                else => {},
-            }
+        if (opt.isShort('p')) {
+            remove_parents = true;
+        }
+        if (opt.isShort('v')) {
+            verbose = true;
         }
     }
 
     // Process operands.
     var had_operand = false;
-    var exit_status: u8 = 0;
+    var exit_status = EXIT_FAILURE;
 
-    // TODO: CRITICAL BUG - Calling reset() here is inefficient and potentially problematic.
-    // The argsIt already consumed all options, so calling reset() forces re-parsing
-    // the entire argument list from the OS. This is especially bad because:
-    // 1. It's unnecessary - the iterator should already be positioned after options
-    // 2. It doubles the system calls to read args
-    // 3. If there's any issue with reset() (known bug in your args.zig), this fails
-    //
-    // SOLUTION: Don't reset. The iterator should naturally move to operands after
-    // nextOption() returns null. Remove the reset() call entirely.
-    try argsIt.reset();
+    // reinit the iterator
+    argsIt = try args.iteratorInit();
 
     while (argsIt.nextOperand()) |dir_path| {
         had_operand = true;
@@ -147,27 +125,22 @@ pub fn main() !u8 {
         if (dir_path.len == 0) continue;
 
         // Reject "." and "..".
-        // TODO: This check has inconsistent capitalization in error message
-        // "Invalid Argument" vs "Invalid argument" below
         if (std.mem.eql(u8, dir_path, ".") or std.mem.eql(u8, dir_path, "..")) {
             try stderr.print(
                 "{s}: failed to remove '{s}': Invalid Argument\n",
                 .{ program_name, dir_path },
             );
-            exit_status = 1;
+            exit_status = EXIT_FAILURE;
             continue;
         }
 
         // Reject paths ending with "/"
-        // TODO: POSIX specifies this behavior, but should this also check for multiple
-        // trailing slashes? "path///" should also be rejected.
-        // Consider: std.mem.endsWith(u8, dir_path, "/")
-        if (dir_path[dir_path.len - 1] == '/') {
+        if (std.mem.endsWith(u8, dir_path, "/")) {
             try stderr.print(
-                "{s}: failed to remove '{s}': Invalid argument\n",
+                "{s}: failed to remove '{s}': Invalid Argument\n",
                 .{ program_name, dir_path },
             );
-            exit_status = 1;
+            exit_status = EXIT_FAILURE;
             continue;
         }
 
@@ -184,7 +157,7 @@ pub fn main() !u8 {
             verbose,
             ignore_non_empty,
         )) {
-            exit_status = 1;
+            exit_status = EXIT_FAILURE;
         }
     }
 
@@ -193,7 +166,7 @@ pub fn main() !u8 {
             "{s}: missing operand\nTry '{s} --help' for more information.\n",
             .{ program_name, program_name },
         );
-        return 1;
+        return EXIT_FAILURE;
     }
 
     return exit_status;

@@ -31,6 +31,18 @@ pub const ParsedOption = struct {
     spec: *const OptionSpec,
     /// The parameter value if the option accepts one, null otherwise.
     value: ?[]const u8,
+
+    pub fn isLong(self: *const @This(), option_name: []const u8) bool {
+        const long_option = self.spec.long orelse return false;
+
+        return std.mem.eql(u8, long_option, option_name);
+    }
+
+    pub fn isShort(self: *const @This(), option_name: u8) bool {
+        const short_option = self.spec.short orelse return false;
+
+        return short_option == option_name;
+    }
 };
 
 // Result of parsing an argument
@@ -48,20 +60,6 @@ const ArgToken = union(enum) {
 pub const ArgsIterator = struct {
     scanner: ArgScanner,
     specs: []const OptionSpec,
-
-    /// Reset the iterator to the beginning of arguments.
-    /// TODO: This creates a new process args iterator each time, which re-reads from the OS.
-    /// Consider caching args in a buffer if reset() will be called frequently.
-    pub fn reset(self: *ArgsIterator) !void {
-        // TODO: Error handling could be more specific - what happens if the environment changed?
-        self.scanner.reset() catch |err| {
-            switch (err) {
-                error.NoProgramName => {
-                    return error.NoProgramName;
-                },
-            }
-        };
-    }
 
     /// Get the next option, skipping over operands.
     pub fn nextOption(self: *@This()) OptionError!?ParsedOption {
@@ -274,7 +272,7 @@ pub const Args = struct {
     /// TODO: This creates a fresh scanner each time, which means creating a new process.args()
     /// iterator. This works but is inefficient if you need multiple passes over args.
     /// Consider: should iterator() return a value or pointer? Currently returns by value.
-    pub fn iterator(self: *const Args) !ArgsIterator {
+    pub fn iteratorInit(self: *const Args) !ArgsIterator {
         // TODO: self.scanner is not used here - we create a new one. Should we clone self.scanner instead?
         return .{
             .scanner = try ArgScanner.init(),
