@@ -21,21 +21,24 @@ const fs = std.fs;
 const utils = @import("common/utils.zig");
 const version = @import("common/version.zig");
 const arguments = @import("common/args.zig");
+const errors = @import("common/errors.zig");
 const Args = arguments.Args;
 
+// TODO: Consider adding proper exit codes as constants for better maintainability
+// const EXIT_SUCCESS: u8 = 0;
+// const EXIT_FAILURE: u8 = 1;
+
 pub fn main() !u8 {
+    // TODO: These writer patterns are verbose. Consider a helper function or wrapper:
+    // const io = try utils.getStdIO();
+    // Then use io.stdout, io.stderr
     var stdout_writer = fs.File.stdout().writer(&.{});
     var stderr_writer = fs.File.stderr().writer(&.{});
     const stdout = &stdout_writer.interface;
     const stderr = &stderr_writer.interface;
 
     const specs = [_]arguments.OptionSpec{
-        .{
-            .short = 'p',
-            .long = "parents",
-            .help = "remove DIRECTORY and its ancestors; e.g., 'rmdir -p a/b/c' is similar to 'rmdir a/b/c a/b a'",
-            // TODO: create a struct for the help message containing the help msg format and argumetns if needed
-        },
+        .{ .short = 'p', .long = "parents", .help = "remove DIRECTORY and its ancestors" },
         .{
             .short = 'v',
             .long = "verbose",
@@ -45,10 +48,12 @@ pub fn main() !u8 {
             .long = "ignore-fail-on-non-empty",
             .help = "ignore each failure that is solely because a directory is non-empty",
         },
+        // TODO: Consider adding .short = 'h' for --help (common convention)
         .{
             .long = "help",
             .help = "display this help and exit",
         },
+        // TODO: Consider adding .short = 'V' for --version (common convention)
         .{
             .long = "version",
             .help = "output version information and exit",
@@ -64,8 +69,9 @@ pub fn main() !u8 {
     var argsIt = try args.iterator();
 
     // Process options.
-    argsIt.setMode(.options_only);
-    while (argsIt.next() catch |err| {
+    // TODO: The error handling pattern is repetitive. Consider extracting to a helper function:
+    // handleOptionError(stderr, program_name, err)
+    while (argsIt.nextOption() catch |err| {
         switch (err) {
             error.UnknownOption => {
                 try stderr.print(
@@ -87,8 +93,11 @@ pub fn main() !u8 {
             },
         }
         return 1;
-    }) |arg| {
-        if (arg.option.spec.long) |l| {
+    }) |opt| {
+        // TODO: This pattern could be simplified with a helper. Consider:
+        // if (opt.isLong("help")) { ... }
+        // if (opt.isShort('p')) { ... }
+        if (opt.spec.long) |l| {
             if (std.mem.eql(u8, l, "help")) {
                 try printHelp(stdout, program_name, &specs);
                 return 0;
@@ -104,10 +113,13 @@ pub fn main() !u8 {
         }
 
         // Handle short options
-        if (arg.option.spec.short) |c| {
+        if (opt.spec.short) |c| {
             switch (c) {
                 'p' => remove_parents = true,
                 'v' => verbose = true,
+                // TODO: The else branch is unnecessary if all short options are handled above.
+                // If a short option exists in specs but isn't handled here, that's a bug.
+                // Consider adding a compile-time assertion or at least an unreachable.
                 else => {},
             }
         }
@@ -117,54 +129,57 @@ pub fn main() !u8 {
     var had_operand = false;
     var exit_status: u8 = 0;
 
-    argsIt.reset();
-    argsIt.setMode(.operands_only);
-    while (argsIt.next() catch |err| {
-        switch (err) {
-            error.UnknownOption => {
-                // TODO: handle error
-                return 1;
-            },
-            error.UnexpectedArgument => {
-                // TODO: handle error
-                return 1;
-            },
-            error.MissingOptionArgument => {
-                // TODO: handle error
-                return 1;
-            },
-        }
-    }) |arg| {
+    // TODO: CRITICAL BUG - Calling reset() here is inefficient and potentially problematic.
+    // The argsIt already consumed all options, so calling reset() forces re-parsing
+    // the entire argument list from the OS. This is especially bad because:
+    // 1. It's unnecessary - the iterator should already be positioned after options
+    // 2. It doubles the system calls to read args
+    // 3. If there's any issue with reset() (known bug in your args.zig), this fails
+    //
+    // SOLUTION: Don't reset. The iterator should naturally move to operands after
+    // nextOption() returns null. Remove the reset() call entirely.
+    try argsIt.reset();
+
+    while (argsIt.nextOperand()) |dir_path| {
         had_operand = true;
-        const path = arg.operand;
 
         // Safety (shouldn't happen)
-        if (path.len == 0) continue;
+        if (dir_path.len == 0) continue;
 
-        // Validate path: reject "." and ".."
-        if (std.mem.eql(u8, path, ".") or std.mem.eql(u8, path, "..")) {
+        // Reject "." and "..".
+        // TODO: This check has inconsistent capitalization in error message
+        // "Invalid Argument" vs "Invalid argument" below
+        if (std.mem.eql(u8, dir_path, ".") or std.mem.eql(u8, dir_path, "..")) {
             try stderr.print(
-                "{s}: failed to remove '{s}': Invalid Argument\n", // TODO: create custom error
-                .{ program_name, path },
+                "{s}: failed to remove '{s}': Invalid Argument\n",
+                .{ program_name, dir_path },
             );
             exit_status = 1;
             continue;
         }
 
-        // Validate path: reject paths ending with "/" (POSIX behavior)
-        if (path[path.len - 1] == '/') {
+        // Reject paths ending with "/"
+        // TODO: POSIX specifies this behavior, but should this also check for multiple
+        // trailing slashes? "path///" should also be rejected.
+        // Consider: std.mem.endsWith(u8, dir_path, "/")
+        if (dir_path[dir_path.len - 1] == '/') {
             try stderr.print(
                 "{s}: failed to remove '{s}': Invalid argument\n",
-                .{ program_name, path },
+                .{ program_name, dir_path },
             );
             exit_status = 1;
             continue;
         }
+
+        // TODO: Consider validating paths earlier:
+        // - Empty path components (path//path)
+        // - Null bytes in path
+        // - Excessively long paths before attempting removal
 
         if (!try removeOne(
             stderr,
             program_name,
-            path,
+            dir_path,
             remove_parents,
             verbose,
             ignore_non_empty,
@@ -186,6 +201,9 @@ pub fn main() !u8 {
 
 /// Remove a directory, optionally with its parent directories.
 /// Returns true on success, false on failure.
+// TODO: Function signature could be cleaner with a config struct:
+// const RemoveConfig = struct { parents: bool, verbose: bool, ignore_non_empty: bool };
+// This reduces parameter count and makes call sites clearer.
 fn removeOne(
     stderr: anytype,
     program_name: []const u8,
@@ -201,10 +219,16 @@ fn removeOne(
         // Attempt to remove the directory
         if (fs.cwd().deleteDir(current)) {
             if (verbose) {
+                // TODO: POSIX compliance - verbose output should go to stdout, not stderr
+                // GNU rmdir sends verbose messages to stdout
                 try stderr.print("{s}: removing directory, '{s}'\n", .{ program_name, current });
             }
         } else |err| {
             // Handle specific error cases
+            // TODO: This error handling pattern is clever but has issues:
+            // 1. The err_is_dir_not_empty logic is convoluted
+            // 2. Setting success=false before checking ignore_non_empty then setting it back to true is confusing
+            // 3. Consider extracting error printing to a separate function
             const err_is_dir_not_empty = switch (err) {
                 // Check if the error is 'dir not empty' so that the logic can be handled
                 // underneath, taking into account the ignore-fail-on-non-empty option.
@@ -274,6 +298,11 @@ fn removeOne(
                     );
                     break :blk false;
                 },
+                // TODO: Add more specific errors:
+                // - error.PathAlreadyExists (shouldn't happen for deleteDir but be defensive)
+                // - error.IsDir (if path is actually a file, though NotDir should cover this)
+                // - error.NoDevice
+                // - error.NoSpaceLeft
                 else => blk: {
                     // Generic error handling for unexpected errors
                     try stderr.print(
@@ -284,6 +313,19 @@ fn removeOne(
                 },
             };
 
+            // TODO: This logic is confusing. The success flag is set to false, then
+            // potentially set back to true. Consider restructuring:
+            //
+            // if (err_is_dir_not_empty) {
+            //     if (ignore_non_empty) {
+            //         // Silently ignore
+            //     } else {
+            //         try stderr.print(...);
+            //         success = false;
+            //     }
+            // } else {
+            //     success = false; // Error was already printed above
+            // }
             success = false;
 
             if (err_is_dir_not_empty and !ignore_non_empty) {
@@ -293,6 +335,9 @@ fn removeOne(
                 );
             } else if (ignore_non_empty) {
                 // ignore the fail of 'dir not empty'
+                // TODO: This condition is wrong. It sets success=true for ANY error
+                // if ignore_non_empty is set, not just DirNotEmpty errors.
+                // Should be: else if (err_is_dir_not_empty and ignore_non_empty)
                 success = true;
             }
 
@@ -307,12 +352,20 @@ fn removeOne(
         const parent = utils.dirname(current) orelse break;
 
         // Stop if it reached the root or current directory.
+        // TODO: This check might not handle all edge cases:
+        // - What about Windows paths? "C:\" vs "/"
+        // - What about network paths? "//server/share"
+        // - Empty string check is redundant if dirname() returns null for these cases
+        // - Should also check for current == parent to prevent infinite loops
         if (parent.len == 0 or
             std.mem.eql(u8, parent, ".") or
             std.mem.eql(u8, parent, "/"))
         {
             break;
         }
+
+        // TODO: Add infinite loop protection:
+        // if (std.mem.eql(u8, current, parent)) break;
 
         current = parent;
     }
@@ -325,6 +378,17 @@ fn printHelp(
     program: []const u8,
     specs: []const arguments.OptionSpec,
 ) !void {
+    // TODO: Help text is missing several standard sections:
+    // - Author information
+    // - Reporting bugs section
+    // - Copyright notice
+    // - SEE ALSO references
+    // - Examples section
+    //
+    // Compare with: rmdir --help
+    //
+    // TODO: The help text doesn't explain the -p behavior clearly.
+    // Should mention that 'rmdir -p a/b/c' is like 'rmdir a/b/c a/b a'
     try writer.print(
         \\Usage: {s} [OPTION]... DIRECTORY...
         \\
@@ -334,4 +398,33 @@ fn printHelp(
     , .{program});
 
     try arguments.printHelp(writer, specs);
+
+    // TODO: Add footer with additional information:
+    // - Exit status codes (0 = success, 1 = failure)
+    // - POSIX compliance notes
+    // - Behavior with symlinks (not followed)
+    // - Difference from 'rm -d' or 'rm -r'
 }
+
+// TODO: Missing comprehensive tests. Should add:
+// test "rejects dot and dotdot" { ... }
+// test "rejects trailing slash" { ... }
+// test "removes with parents flag" { ... }
+// test "stops on first parent removal failure" { ... }
+// test "verbose output format" { ... }
+// test "ignore non-empty behavior" { ... }
+// test "multiple directories in one invocation" { ... }
+// test "option before and after operand" { ... }
+// test "handles permission errors gracefully" { ... }
+
+// TODO: Consider adding a dry-run mode (-n/--dry-run) for testing
+
+// TODO: Memory safety - all paths are slices from argv, which is fine,
+// but should document that paths must remain valid for the program lifetime
+
+// TODO: Performance consideration - for large directory trees with -p,
+// consider batching operations or providing progress indicators
+
+// TODO: Race condition - between checking path and removing it, another process
+// could create/modify the directory. This is acceptable (TOCTOU is unavoidable)
+// but should be documented in the code.

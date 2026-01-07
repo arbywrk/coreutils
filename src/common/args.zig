@@ -1,15 +1,7 @@
 const std = @import("std");
-const utils = @import("utils.zig");
 
-/// Defines whether an option takes a parameter.
-pub const OptionParameterType = enum {
-    /// Option takes no parameter (e.g., -v, --verbose)
-    none,
-    /// Option requires a parameter (e.g., -o file, --output=file)
-    required,
-    /// Option accepts an optional parameter (e.g., --color[=always])
-    optional,
-};
+const utils = @import("utils.zig");
+const OptionError = @import("errors.zig").OptionError;
 
 /// Specification for a command-line option.
 pub const OptionSpec = struct {
@@ -23,6 +15,16 @@ pub const OptionSpec = struct {
     help: []const u8 = "",
 };
 
+/// Defines whether an option takes a parameter.
+pub const OptionParameterType = enum {
+    /// Option takes no parameter (e.g., -v, --verbose)
+    none,
+    /// Option requires a parameter (e.g., -o file, --output=file)
+    required,
+    /// Option accepts an optional parameter (e.g., --color[=always])
+    optional,
+};
+
 /// Result of parsing a single option.
 pub const ParsedOption = struct {
     /// The specification that matched this option.
@@ -31,15 +33,10 @@ pub const ParsedOption = struct {
     value: ?[]const u8,
 };
 
-pub const ParseItem = union(enum) {
+// Result of parsing an argument
+pub const ParsedArg = union(enum) {
     option: ParsedOption,
     operand: []const u8,
-};
-
-pub const OptionError = error{
-    UnknownOption,
-    MissingOptionArgument,
-    UnexpectedArgument,
 };
 
 const ArgToken = union(enum) {
@@ -48,55 +45,97 @@ const ArgToken = union(enum) {
     operand: []const u8,
 };
 
-const IterMode = enum {
-    options_only,
-    operands_only,
-    all,
-};
-
-pub const ParsedArg = union(enum) {
-    option: struct {
-        spec: *const OptionSpec,
-        value: ?[]const u8,
-    },
-    operand: []const u8,
-};
-
 pub const ArgsIterator = struct {
     scanner: ArgScanner,
     specs: []const OptionSpec,
-    mode: IterMode = .all,
 
-    pub fn setMode(self: *ArgsIterator, mode: IterMode) void {
-        self.mode = mode;
+    /// Reset the iterator to the beginning of arguments.
+    /// TODO: This creates a new process args iterator each time, which re-reads from the OS.
+    /// Consider caching args in a buffer if reset() will be called frequently.
+    pub fn reset(self: *ArgsIterator) !void {
+        // TODO: Error handling could be more specific - what happens if the environment changed?
+        self.scanner.reset() catch |err| {
+            switch (err) {
+                error.NoProgramName => {
+                    return error.NoProgramName;
+                },
+            }
+        };
     }
 
-    pub fn reset(self: *ArgsIterator) void {
-        self.scanner.reset() catch {}; // TODO: handle error
+    /// Get the next option, skipping over operands.
+    pub fn nextOption(self: *@This()) OptionError!?ParsedOption {
+        while (true) {
+            const tok = self.scanner.nextToken() orelse return null;
+
+            switch (tok) {
+                .operand => {
+                    // ignore operands
+                    continue;
+                },
+
+                .short => |s| {
+                    const spec = findShort(self.specs, s.name) orelse
+                        return error.UnknownOption;
+
+                    const val = try consumeValue(&self.scanner, s.inline_value, spec.parm_type);
+                    return .{ .spec = spec, .value = val };
+                },
+
+                .long => |l| {
+                    const spec = findLong(self.specs, l.name) orelse
+                        return error.UnknownOption;
+
+                    const val = try consumeValue(&self.scanner, l.inline_value, spec.parm_type);
+                    return .{ .spec = spec, .value = val };
+                },
+            }
+        }
     }
 
-    // TODO: create 3 functions: nextOption, nextOperand and next instead of the enum setting
+    /// Get the next operand, skipping over options.
+    /// TODO: This skips options but doesn't consume their arguments, which could lead to
+    /// operands being consumed as option values. Need to track option consumption state.
+    pub fn nextOperand(self: *@This()) ?[]const u8 {
+        while (true) {
+            const tok = self.scanner.nextToken() orelse return null;
+
+            switch (tok) {
+                .operand => |op| {
+                    return op;
+                },
+                .short, .long => {
+                    // TODO: This is a bug! If an option requires an argument, we need to skip
+                    // the next token too. Currently, if you call nextOperand() without first
+                    // processing options, you might get option arguments as operands.
+                    // Example: "prog -o file.txt input.txt" - "file.txt" might be returned as operand.
+                    continue;
+                },
+            }
+        }
+    }
+
+    /// Get the next argument (option or operand) in order.
     pub fn next(self: *ArgsIterator) OptionError!?ParsedArg {
         while (true) {
             const tok = self.scanner.nextToken() orelse return null;
 
             switch (tok) {
                 .operand => |op| {
-                    if (self.mode == .options_only) continue;
                     return .{ .operand = op };
                 },
 
                 .short => |s| {
-                    if (self.mode == .operands_only) continue;
-                    const spec = findShort(self.specs, s.name) orelse return error.UnknownOption;
+                    const spec = findShort(self.specs, s.name) orelse
+                        return error.UnknownOption;
 
                     const val = try consumeValue(&self.scanner, s.inline_value, spec.parm_type);
                     return .{ .option = .{ .spec = spec, .value = val } };
                 },
 
                 .long => |l| {
-                    if (self.mode == .operands_only) continue;
-                    const spec = findLong(self.specs, l.name) orelse return error.UnknownOption;
+                    const spec = findLong(self.specs, l.name) orelse
+                        return error.UnknownOption;
 
                     const val = try consumeValue(&self.scanner, l.inline_value, spec.parm_type);
                     return .{ .option = .{ .spec = spec, .value = val } };
@@ -116,13 +155,22 @@ fn findLong(specs: []const OptionSpec, name: []const u8) ?*const OptionSpec {
     return null;
 }
 
+/// TODO: This function has a subtle bug - when kind is .required and inline_val is null,
+/// it consumes the next argument without checking if it's an option or operand.
+/// This means "prog -o --help" would consume "--help" as the value for -o.
+/// Should validate that the consumed argument is not an option.
 fn consumeValue(
     scanner: *ArgScanner,
     inline_val: ?[]const u8,
     kind: OptionParameterType,
 ) OptionError!?[]const u8 {
     return switch (kind) {
-        .none => null,
+        .none => blk: {
+            // TODO: Should check if inline_val is provided and return error.UnexpectedArgument
+            // Currently silently ignores: "prog --verbose=something" would not error
+            if (inline_val != null) return error.UnexpectedArgument;
+            break :blk null;
+        },
         .required => inline_val orelse scanner.args.next() orelse error.MissingOptionArgument,
         .optional => inline_val,
     };
@@ -147,9 +195,18 @@ const ArgScanner = struct {
         self.short_group = null;
     }
 
+    /// TODO: The short option clustering logic has a subtle issue.
+    /// When returning a short option with inline_value, it includes ALL remaining characters.
+    /// This breaks the expected behavior: "-ofile" should return 'o' with value "file",
+    /// but "-abc" should return 'a', then 'b', then 'c' separately.
+    /// The current logic always returns inline_value for any short option in a group.
     pub fn nextToken(self: *ArgScanner) ?ArgToken {
         if (self.short_group) |g| {
             defer self.short_group = if (g.len > 1) g[1..] else null;
+
+            // TODO: This is wrong for clustering. Should only set inline_value if this is
+            // the last char in the group. Otherwise "-abc" would try to parse "bc" as a value.
+            // Correct behavior: only the LAST option in a cluster can have an inline value.
             return .{
                 .short = .{
                     .name = g[0],
@@ -165,6 +222,7 @@ const ArgScanner = struct {
             return self.nextToken();
         }
 
+        // TODO: Should handle single dash "-" as operand (commonly used for stdin/stdout)
         if (!self.after_delim and raw.len >= 2 and raw[0] == '-') {
             if (raw[1] == '-') {
                 const eq = std.mem.indexOfScalar(u8, raw, '=');
@@ -190,12 +248,15 @@ pub const Args = struct {
     specs: []const OptionSpec,
     program_name: []const u8,
 
+    /// TODO: This stores program_name but scanner also processes argv[0].
+    /// The scanner.init() already skips the first arg, so there's duplication.
+    /// Consider either: 1) Pass program_name to init, or 2) Add a method to get it from scanner
     pub fn init(
         specs: []const OptionSpec,
     ) !Args {
         var args = std.process.args();
         const arg0 = args.next() orelse {
-            // there will always be at leas 1 arg
+            // there will always be at least 1 arg
             // but just in case...
             return error.NoProgramName;
         };
@@ -210,7 +271,11 @@ pub const Args = struct {
         return self.program_name;
     }
 
+    /// TODO: This creates a fresh scanner each time, which means creating a new process.args()
+    /// iterator. This works but is inefficient if you need multiple passes over args.
+    /// Consider: should iterator() return a value or pointer? Currently returns by value.
     pub fn iterator(self: *const Args) !ArgsIterator {
+        // TODO: self.scanner is not used here - we create a new one. Should we clone self.scanner instead?
         return .{
             .scanner = try ArgScanner.init(),
             .specs = self.specs,
@@ -219,6 +284,8 @@ pub const Args = struct {
 };
 
 /// Print help text for all option specifications.
+/// TODO: Add formatting options - indent level, max width for wrapping, etc.
+/// TODO: Support for option groups/categories in help output
 pub fn printHelp(
     writer: anytype,
     specs: []const OptionSpec,
@@ -237,3 +304,11 @@ pub fn printHelp(
         try writer.print("\n      {s}\n", .{s.help});
     }
 }
+
+// TODO: Add comprehensive tests, especially for:
+// - Short option clustering edge cases (-abc vs -ofile)
+// - Mixed option and operand ordering
+// - Multiple iterator instances and reset() behavior
+// - Error cases (unknown options, missing arguments, unexpected arguments)
+// - Special cases: single dash "-", double dash "--", empty args
+// - POSIX compliance: can options appear after operands?
