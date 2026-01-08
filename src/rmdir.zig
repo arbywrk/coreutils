@@ -15,149 +15,79 @@
 //  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
 const std = @import("std");
-const proc = std.process;
 const fs = std.fs;
 
 const utils = @import("common/utils.zig");
 const version = @import("common/version.zig");
-const arguments = @import("common/args.zig");
-const errors = @import("common/errors.zig");
-const Args = arguments.Args;
-const EXIT_SUCCESS = @import("common/config.zig").EXIT_SUCCESS;
-const EXIT_FAILURE = @import("common/config.zig").EXIT_FAILURE;
-const io = @import("common/io.zig");
+const args = @import("common/args.zig");
+const config = @import("common/config.zig");
 
 pub fn main() !u8 {
+    const specs = [_]args.OptionSpec{
+        .{ .short = 'p', .long = "parents", .help = "remove DIRECTORY and its ancestors; e.g., 'rmdir -p a/b/c' removes a/b/c, a/b, and a" },
+        .{ .short = 'v', .long = "verbose", .help = "output a diagnostic for every directory processed" },
+        .{ .long = "ignore-fail-on-non-empty", .help = "ignore each failure that is solely because a directory is non-empty" },
+        .{ .long = "help", .help = "display this help and exit" },
+        .{ .long = "version", .help = "output version information and exit" },
+    };
+
     var stdout_writer = fs.File.stdout().writer(&.{});
     var stderr_writer = fs.File.stderr().writer(&.{});
     const stdout = &stdout_writer.interface;
     const stderr = &stderr_writer.interface;
 
-    const specs = [_]arguments.OptionSpec{
-        .{ .short = 'p', .long = "parents", .help = "remove DIRECTORY and its ancestors" },
-        .{
-            .short = 'v',
-            .long = "verbose",
-            .help = "output a diagnostic for every directory processed",
-        },
-        .{
-            .long = "ignore-fail-on-non-empty",
-            .help = "ignore each failure that is solely because a directory is non-empty",
-        },
-        .{
-            .long = "help",
-            .help = "display this help and exit",
-        },
-        .{
-            .long = "version",
-            .help = "output version information and exit",
-        },
-    };
+    var arguments = try args.Args.init(&specs);
+    const program_name = arguments.programName();
+    var iter = try arguments.iterator();
 
+    // Configuration flags
     var remove_parents = false;
     var verbose = false;
     var ignore_non_empty = false;
 
-    var args = try Args.init(&specs);
-    const program_name = args.programName();
-    var argsIt = try args.iteratorInit();
-
-    // Process options.
-    // TODO: The error handling pattern is repetitive. Consider extracting to a helper function:
-    // handleOptionError(stderr, program_name, err)
-    while (argsIt.nextOption() catch |err| {
-        switch (err) {
-            error.UnknownOption => {
-                try stderr.print(
-                    "{s}: invalid option\nTry '{s} --help' for more information.\n",
-                    .{ program_name, program_name },
-                );
-            },
-            error.MissingOptionArgument => {
-                try stderr.print(
-                    "{s}: option requires an argument\nTry '{s} --help' for more information.\n",
-                    .{ program_name, program_name },
-                );
-            },
-            error.UnexpectedArgument => {
-                try stderr.print(
-                    "{s}: option does not take an argument\nTry '{s} --help' for more information.\n",
-                    .{ program_name, program_name },
-                );
-            },
-        }
-        return EXIT_FAILURE;
+    // Process all options
+    while (iter.nextOption() catch |err| {
+        try args.printError(stderr, program_name, err);
+        return config.EXIT_FAILURE;
     }) |opt| {
-        // handle long options
         if (opt.isLong("help")) {
             try printHelp(stdout, program_name, &specs);
-            return EXIT_SUCCESS;
+            return config.EXIT_SUCCESS;
         }
         if (opt.isLong("version")) {
             try version.printVersion(stdout, program_name);
-            return EXIT_SUCCESS;
+            return config.EXIT_SUCCESS;
         }
         if (opt.isLong("ignore-fail-on-non-empty")) {
             ignore_non_empty = true;
-            continue;
         }
-
-        // Handle short options
-        if (opt.isShort('p')) {
-            remove_parents = true;
-        }
-        if (opt.isShort('v')) {
-            verbose = true;
-        }
+        if (opt.isShort('p')) remove_parents = true;
+        if (opt.isShort('v')) verbose = true;
     }
 
-    // Process operands.
+    // Process operands (directory paths)
     var had_operand = false;
-    var exit_status = EXIT_FAILURE;
+    var exit_status = config.EXIT_SUCCESS;
 
-    // reinit the iterator
-    argsIt = try args.iteratorInit();
+    // reinit args iterator
+    iter = try arguments.iterator();
 
-    while (argsIt.nextOperand()) |dir_path| {
+    while (try iter.nextOperand()) |dir_path| {
         had_operand = true;
 
-        // Safety (shouldn't happen)
-        if (dir_path.len == 0) continue;
-
-        // Reject "." and "..".
-        if (std.mem.eql(u8, dir_path, ".") or std.mem.eql(u8, dir_path, "..")) {
-            try stderr.print(
-                "{s}: failed to remove '{s}': Invalid Argument\n",
-                .{ program_name, dir_path },
-            );
-            exit_status = EXIT_FAILURE;
+        // Validate path before attempting removal
+        if (!validatePath(stderr, program_name, dir_path)) {
+            exit_status = config.EXIT_FAILURE;
             continue;
         }
 
-        // Reject paths ending with "/"
-        if (std.mem.endsWith(u8, dir_path, "/")) {
-            try stderr.print(
-                "{s}: failed to remove '{s}': Invalid Argument\n",
-                .{ program_name, dir_path },
-            );
-            exit_status = EXIT_FAILURE;
-            continue;
-        }
-
-        // TODO: Consider validating paths earlier:
-        // - Empty path components (path//path)
-        // - Null bytes in path
-        // - Excessively long paths before attempting removal
-
-        if (!try removeOne(
-            stderr,
-            program_name,
-            dir_path,
-            remove_parents,
-            verbose,
-            ignore_non_empty,
-        )) {
-            exit_status = EXIT_FAILURE;
+        // Attempt removal
+        if (!try removeDirectory(stdout, stderr, program_name, dir_path, .{
+            .parents = remove_parents,
+            .verbose = verbose,
+            .ignore_non_empty = ignore_non_empty,
+        })) {
+            exit_status = config.EXIT_FAILURE;
         }
     }
 
@@ -166,238 +96,142 @@ pub fn main() !u8 {
             "{s}: missing operand\nTry '{s} --help' for more information.\n",
             .{ program_name, program_name },
         );
-        return EXIT_FAILURE;
+        return config.EXIT_FAILURE;
     }
 
     return exit_status;
 }
 
-/// Remove a directory, optionally with its parent directories.
-/// Returns true on success, false on failure.
-// TODO: Function signature could be cleaner with a config struct:
-// const RemoveConfig = struct { parents: bool, verbose: bool, ignore_non_empty: bool };
-// This reduces parameter count and makes call sites clearer.
-fn removeOne(
-    stderr: anytype,
-    program_name: []const u8,
-    path: []const u8,
+const RemoveOptions = struct {
     parents: bool,
     verbose: bool,
     ignore_non_empty: bool,
+};
+
+/// Validates directory path for common errors. Returns false if invalid.
+fn validatePath(stderr: anytype, program_name: []const u8, path: []const u8) bool {
+    if (path.len == 0) return false;
+
+    // Reject "." and ".."
+    if (std.mem.eql(u8, path, ".") or std.mem.eql(u8, path, "..")) {
+        stderr.print(
+            "{s}: failed to remove '{s}': Invalid argument\n",
+            .{ program_name, path },
+        ) catch {};
+        return false;
+    }
+
+    // Reject paths ending with slash
+    if (std.mem.endsWith(u8, path, "/")) {
+        stderr.print(
+            "{s}: failed to remove '{s}': Invalid argument\n",
+            .{ program_name, path },
+        ) catch {};
+        return false;
+    }
+
+    return true;
+}
+
+/// Removes directory and optionally its parents. Returns true on success.
+fn removeDirectory(
+    stdout: anytype,
+    stderr: anytype,
+    program_name: []const u8,
+    path: []const u8,
+    opts: RemoveOptions,
 ) !bool {
-    var success = true;
     var current = path;
+    var overall_success = true;
 
     while (true) {
-        // Attempt to remove the directory
-        if (fs.cwd().deleteDir(current)) {
-            if (verbose) {
-                // TODO: POSIX compliance - verbose output should go to stdout, not stderr
-                // GNU rmdir sends verbose messages to stdout
-                try stderr.print("{s}: removing directory, '{s}'\n", .{ program_name, current });
+        fs.cwd().deleteDir(current) catch |err| {
+            const is_not_empty = (err == error.DirNotEmpty);
+
+            // Handle DirNotEmpty specially due to --ignore-fail-on-non-empty
+            if (is_not_empty and opts.ignore_non_empty) {
+                // Silently ignore
+                break;
             }
-        } else |err| {
-            // Handle specific error cases
-            // TODO: This error handling pattern is clever but has issues:
-            // 1. The err_is_dir_not_empty logic is convoluted
-            // 2. Setting success=false before checking ignore_non_empty then setting it back to true is confusing
-            // 3. Consider extracting error printing to a separate function
-            const err_is_dir_not_empty = switch (err) {
-                // Check if the error is 'dir not empty' so that the logic can be handled
-                // underneath, taking into account the ignore-fail-on-non-empty option.
-                error.DirNotEmpty => true,
 
-                // The other errors are handled on the spot
-                error.FileNotFound => blk: {
-                    try stderr.print(
-                        "{s}: failed to remove '{s}': No such file or directory\n",
-                        .{ program_name, current },
-                    );
-                    break :blk false;
-                },
-                error.NotDir => blk: {
-                    try stderr.print(
-                        "{s}: failed to remove '{s}': Not a directory\n",
-                        .{ program_name, current },
-                    );
-                    break :blk false;
-                },
-                error.AccessDenied => blk: {
-                    try stderr.print(
-                        "{s}: failed to remove '{s}': Permission denied\n",
-                        .{ program_name, current },
-                    );
-                    break :blk false;
-                },
-                error.FileBusy => blk: {
-                    try stderr.print(
-                        "{s}: failed to remove '{s}': Device or resource busy\n",
-                        .{ program_name, current },
-                    );
-                    break :blk false;
-                },
-                error.InvalidUtf8 => blk: {
-                    try stderr.print(
-                        "{s}: failed to remove '{s}': Invalid UTF-8\n",
-                        .{ program_name, current },
-                    );
-                    break :blk false;
-                },
-                error.SymLinkLoop => blk: {
-                    try stderr.print(
-                        "{s}: failed to remove '{s}': Too many levels of symbolic links\n",
-                        .{ program_name, current },
-                    );
-                    break :blk false;
-                },
-                error.NameTooLong => blk: {
-                    try stderr.print(
-                        "{s}: failed to remove '{s}': File name too long\n",
-                        .{ program_name, current },
-                    );
-                    break :blk false;
-                },
-                error.SystemResources => blk: {
-                    try stderr.print(
-                        "{s}: failed to remove '{s}': Insufficient kernel memory\n",
-                        .{ program_name, current },
-                    );
-                    break :blk false;
-                },
-                error.ReadOnlyFileSystem => blk: {
-                    try stderr.print(
-                        "{s}: failed to remove '{s}': Read-only file system\n",
-                        .{ program_name, current },
-                    );
-                    break :blk false;
-                },
-                // TODO: Add more specific errors:
-                // - error.PathAlreadyExists (shouldn't happen for deleteDir but be defensive)
-                // - error.IsDir (if path is actually a file, though NotDir should cover this)
-                // - error.NoDevice
-                // - error.NoSpaceLeft
-                else => blk: {
-                    // Generic error handling for unexpected errors
-                    try stderr.print(
-                        "{s}: failed to remove '{s}': {s}\n",
-                        .{ program_name, current, @errorName(err) },
-                    );
-                    break :blk false;
-                },
-            };
-
-            // TODO: This logic is confusing. The success flag is set to false, then
-            // potentially set back to true. Consider restructuring:
-            //
-            // if (err_is_dir_not_empty) {
-            //     if (ignore_non_empty) {
-            //         // Silently ignore
-            //     } else {
-            //         try stderr.print(...);
-            //         success = false;
-            //     }
-            // } else {
-            //     success = false; // Error was already printed above
-            // }
-            success = false;
-
-            if (err_is_dir_not_empty and !ignore_non_empty) {
+            // Print appropriate error message
+            if (is_not_empty) {
                 try stderr.print(
                     "{s}: failed to remove '{s}': Directory not empty\n",
                     .{ program_name, current },
                 );
-            } else if (ignore_non_empty) {
-                // ignore the fail of 'dir not empty'
-                // TODO: This condition is wrong. It sets success=true for ANY error
-                // if ignore_non_empty is set, not just DirNotEmpty errors.
-                // Should be: else if (err_is_dir_not_empty and ignore_non_empty)
-                success = true;
+            } else {
+                try printRemovalError(stderr, program_name, current, err);
             }
 
-            // If removal fails, don't continue with parents.
+            overall_success = false;
             break;
+        };
+
+        // Successfully removed
+        if (opts.verbose) {
+            try stdout.print("{s}: removing directory, '{s}'\n", .{ program_name, current });
         }
 
-        // If -p not specified, stop after removing the target directory.
-        if (!parents) break;
+        // Stop if not removing parents
+        if (!opts.parents) break;
 
-        // Get parent directory.
+        // Get parent directory
         const parent = utils.dirname(current) orelse break;
 
-        // Stop if it reached the root or current directory.
-        // TODO: This check might not handle all edge cases:
-        // - What about Windows paths? "C:\" vs "/"
-        // - What about network paths? "//server/share"
-        // - Empty string check is redundant if dirname() returns null for these cases
-        // - Should also check for current == parent to prevent infinite loops
+        // Stop at root or current directory
         if (parent.len == 0 or
             std.mem.eql(u8, parent, ".") or
-            std.mem.eql(u8, parent, "/"))
+            std.mem.eql(u8, parent, "/") or
+            std.mem.eql(u8, parent, current))
         {
             break;
         }
 
-        // TODO: Add infinite loop protection:
-        // if (std.mem.eql(u8, current, parent)) break;
-
         current = parent;
     }
 
-    return success;
+    return overall_success;
+}
+
+/// Prints error message for directory removal failure.
+fn printRemovalError(
+    stderr: anytype,
+    program_name: []const u8,
+    path: []const u8,
+    err: anyerror,
+) !void {
+    const message = switch (err) {
+        error.FileNotFound => "No such file or directory",
+        error.NotDir => "Not a directory",
+        error.AccessDenied => "Permission denied",
+        error.FileBusy => "Device or resource busy",
+        error.InvalidUtf8 => "Invalid UTF-8",
+        error.SymLinkLoop => "Too many levels of symbolic links",
+        error.NameTooLong => "File name too long",
+        error.SystemResources => "Insufficient kernel memory",
+        error.ReadOnlyFileSystem => "Read-only file system",
+        else => @errorName(err),
+    };
+
+    try stderr.print(
+        "{s}: failed to remove '{s}': {s}\n",
+        .{ program_name, path, message },
+    );
 }
 
 fn printHelp(
     writer: anytype,
     program: []const u8,
-    specs: []const arguments.OptionSpec,
+    specs: []const args.OptionSpec,
 ) !void {
-    // TODO: Help text is missing several standard sections:
-    // - Author information
-    // - Reporting bugs section
-    // - Copyright notice
-    // - SEE ALSO references
-    // - Examples section
-    //
-    // Compare with: rmdir --help
-    //
-    // TODO: The help text doesn't explain the -p behavior clearly.
-    // Should mention that 'rmdir -p a/b/c' is like 'rmdir a/b/c a/b a'
     try writer.print(
         \\Usage: {s} [OPTION]... DIRECTORY...
-        \\
         \\Remove the DIRECTORY(ies), if they are empty.
         \\
         \\Options:
+        \\
     , .{program});
 
-    try arguments.printHelp(writer, specs);
-
-    // TODO: Add footer with additional information:
-    // - Exit status codes (0 = success, 1 = failure)
-    // - POSIX compliance notes
-    // - Behavior with symlinks (not followed)
-    // - Difference from 'rm -d' or 'rm -r'
+    try args.printHelp(writer, specs);
 }
-
-// TODO: Missing comprehensive tests. Should add:
-// test "rejects dot and dotdot" { ... }
-// test "rejects trailing slash" { ... }
-// test "removes with parents flag" { ... }
-// test "stops on first parent removal failure" { ... }
-// test "verbose output format" { ... }
-// test "ignore non-empty behavior" { ... }
-// test "multiple directories in one invocation" { ... }
-// test "option before and after operand" { ... }
-// test "handles permission errors gracefully" { ... }
-
-// TODO: Consider adding a dry-run mode (-n/--dry-run) for testing
-
-// TODO: Memory safety - all paths are slices from argv, which is fine,
-// but should document that paths must remain valid for the program lifetime
-
-// TODO: Performance consideration - for large directory trees with -p,
-// consider batching operations or providing progress indicators
-
-// TODO: Race condition - between checking path and removing it, another process
-// could create/modify the directory. This is acceptable (TOCTOU is unavoidable)
-// but should be documented in the code.

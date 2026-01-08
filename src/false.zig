@@ -15,37 +15,44 @@
 //  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
 const std = @import("std");
-const utils = @import("common/utils.zig");
 const version = @import("common/version.zig");
+const args = @import("common/args.zig");
+const config = @import("common/config.zig");
 
-pub fn main() !void {
-    const args = try std.process.argsAlloc(std.heap.page_allocator);
-    defer std.process.argsFree(std.heap.page_allocator, args);
+pub fn main() !u8 {
+    const specs = [_]args.OptionSpec{
+        .{ .long = "help", .help = "display this help and exit" },
+        .{ .long = "version", .help = "output version information and exit" },
+    };
 
-    const program_name = utils.basename(args[0]);
+    var arguments = try args.Args.init(&specs);
+    const program_name = arguments.programName();
+    var iter = try arguments.iterator();
 
-    // parse meta-flags
-    if (args.len > 1 and std.mem.startsWith(u8, args[1], "-")) {
-        if (std.mem.eql(u8, args[1], "-v") or std.mem.eql(u8, args[1], "--version")) {
-            var stdout_writer: std.fs.File.Writer = std.fs.File.stdout().writer(&.{});
-            const stdout: *std.Io.Writer = &stdout_writer.interface;
-            try version.printVersion(stdout, program_name);
-            return;
-        } else if (std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "--help")) {
-            var stdout_writer: std.fs.File.Writer = std.fs.File.stdout().writer(&.{});
-            const stdout: *std.Io.Writer = &stdout_writer.interface;
-            const usage =
+    // Check for --help or --version (all other arguments ignored)
+    while (try iter.nextOption()) |opt| {
+        if (opt.isLong("help")) {
+            var stdout_writer = std.fs.File.stdout().writer(&.{});
+            const stdout = &stdout_writer.interface;
+            try stdout.print(
                 \\Usage: {s} [ignored command line arguments]
-                \\       {s} OPTION
+                \\   or: {s} OPTION
+                \\Exit with a status code indicating success.
                 \\
                 \\Options:
-                \\  -h, --help      Print this help and exit
-                \\  -v, --version   Print version and exit
                 \\
-            ;
-            try stdout.print(usage, .{ program_name, program_name });
-            return;
+            , .{ program_name, program_name });
+            try args.printHelp(stdout, &specs);
+            return config.EXIT_SUCCESS;
+        }
+
+        if (opt.isLong("version")) {
+            var stdout_writer = std.fs.File.stdout().writer(&.{});
+            const stdout = &stdout_writer.interface;
+            try version.printVersion(stdout, program_name);
+            return config.EXIT_SUCCESS;
         }
     }
-    std.posix.exit(1);
+
+    return config.EXIT_FAILURE;
 }

@@ -1,18 +1,20 @@
-# coreutils
+# arbys-coreutils
 
-A reimplementation of the *GNU coreutils* in _*Zig*_. This is a work in progress.
+Collection of, _UNIX_ based; *file*, *shell* and *text manipulation* utilities, written in _*Zig*_. 
+
+This is a work in progress.
 
 ## Available Utilities
+- rmdir
 - echo (incomplete)
 - yes (needs memory fixes)
 - hostname (no flags)
-- rmdir
 - true
 - false
 
 ## Build
 ### Dependencies
-- zig 0.15.x
+- zig 0.15.2
 
 ### Steps
 ```bash

@@ -1,4 +1,4 @@
-//  utils.zig
+//  utils.zig, small utilities and helpers
 //  Copyright (C) 2025 Bogdan Rareș-Andrei
 //
 //  This program is free software: you can redistribute it and/or modify

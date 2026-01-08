@@ -14,16 +14,34 @@
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
-
 const std = @import("std");
+const config = @import("common/config.zig");
+const arguments = @import("common/args.zig");
 const posix = std.posix;
 
-pub fn main() !void {
-    const STDOUT = 1;
+pub fn main() !u8 {
+    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    // var stderr_writer = std.fs.File.stderr().writer(&.{});
+    const stdout = &stdout_writer.interface;
+    // const stderr = &stderr_writer.interface;
+
+    // const specs = [_]arguments.OptionSpec{
+    //     .{ .short = 'a', .long = "aliases", .help = "alias names" },
+    //     .{ .short = 'd', .long = "domain", .help = "DNS domain name" },
+    //     .{ .short = 'f', .long = "fqdn", .help = "DNS host name of FQDN" },
+    //     .{ .short = 'f', .long = "long", .help = "DNS host name of FQDN" },
+    //     .{ .short = 'F', .long = "file", .arg = .required, .help = "set host name or NIS domain name from FILE" },
+    //     .{ .short = 'i', .long = "ip-addresses", .help = "addresses for the host name" },
+    //     .{ .short = 's', .long = "short", .help = "short host name" },
+    //     .{ .short = 'y', .long = "yp", .help = "NIS/YP domain name" },
+    //     .{ .short = 'y', .long = "nis", .help = "NIS/YP domain name" },
+    //     .{ .long = "help", .help = "display this help and exit" },
+    //     .{ .long = "version", .help = "output version information and exit" },
+    // };
+
     var hostname_buffer: [posix.HOST_NAME_MAX]u8 = undefined;
     _ = try posix.gethostname(&hostname_buffer);
     const hostname_len = std.mem.indexOfScalar(u8, &hostname_buffer, 0) orelse posix.HOST_NAME_MAX;
-    _ = try posix.write(STDOUT, hostname_buffer[0..hostname_len]);
-    _ = try posix.write(STDOUT, "\n");
-    return;
+    try stdout.print("{s}\n", .{hostname_buffer[0..hostname_len]});
+    return config.EXIT_SUCCESS;
 }
