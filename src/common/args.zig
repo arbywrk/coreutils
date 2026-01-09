@@ -24,20 +24,34 @@ pub const OptionError = error{
     NoProgramName,
 };
 
+/// Describes a command-line option with parse state.
+pub const Option = struct {
+    /// Immutable option definition.
+    def: OptionDef = .{},
+    /// Mutable parse state.
+    state: OptionParseState = .{},
+};
+
 /// Describes a command-line option accepted by the program.
-pub const OptionSpec = struct {
+pub const OptionDef = struct {
     /// Single character flag (e.g., 'v' for -v).
     short: ?u8 = null,
     /// Multi-character name (e.g., "verbose" for --verbose).
     long: ?[]const u8 = null,
     /// Whether this option accepts an argument.
-    arg: ArgumentType = .none,
+    arg: ArgMode = .none,
     /// Description shown in help output.
     help: []const u8 = "",
 };
 
+/// Tracks whether an option's argument was seen during parsing.
+pub const OptionParseState = struct {
+    /// Set to true when option argument is consumed.
+    arg_seen: bool = false,
+};
+
 /// Specifies how an option handles arguments.
-pub const ArgumentType = enum {
+pub const ArgMode = enum {
     /// Option takes no argument (flag only).
     none,
     /// Option requires an argument.
@@ -48,15 +62,15 @@ pub const ArgumentType = enum {
 
 /// A successfully parsed option with its argument if any.
 pub const ParsedOption = struct {
-    spec: *const OptionSpec,
+    def: *const OptionDef,
     argument: ?[]const u8,
 
     pub fn isLong(self: *const ParsedOption, name: []const u8) bool {
-        return if (self.spec.long) |l| std.mem.eql(u8, l, name) else false;
+        return if (self.def.long) |l| std.mem.eql(u8, l, name) else false;
     }
 
     pub fn isShort(self: *const ParsedOption, char: u8) bool {
-        return if (self.spec.short) |s| s == char else false;
+        return if (self.def.short) |s| s == char else false;
     }
 };
 
@@ -78,23 +92,26 @@ const Scanner = struct {
     args: std.process.ArgIterator,
     past_delimiter: bool = false,
     short_cluster: ?[]const u8 = null,
-    specs: []const OptionSpec,
+    options: []Option,
 
-    fn init(specs: []const OptionSpec) !Scanner {
+    fn init(options: []Option) !Scanner {
         var it = std.process.args();
         if (!it.skip()) return error.NoProgramName;
-        return .{ .args = it, .specs = specs };
+        return .{ .args = it, .options = options };
     }
 
     fn next(self: *Scanner) ?Token {
         // Process remaining characters from short option cluster (-abc).
         if (self.short_cluster) |cluster| {
+            // ex: -abcfarg (where -a -b -c -f arg, are options)
+            // will be parsed as -a -b -c -f arg
+
             const char = cluster[0];
             const rest = cluster[1..];
 
             // If this option takes an argument, consume rest of cluster as the value.
-            if (findShort(self.specs, char)) |spec| {
-                if (spec.arg == .required or spec.arg == .optional) {
+            if (findShort(self.options, char)) |option| {
+                if (option.def.arg == .required or option.def.arg == .optional) {
                     self.short_cluster = null;
                     return .{ .short = .{
                         .char = char,
@@ -119,7 +136,7 @@ const Scanner = struct {
             return self.next();
         }
 
-        // Single - is an operand (represents stdin/stdout by convention).
+        // Single - is an operand.
         if (std.mem.eql(u8, arg, "-")) return .{ .operand = arg };
 
         // Long option: --name or --name=value
@@ -164,7 +181,7 @@ const Scanner = struct {
 /// Options may appear anywhere before --.
 pub const ArgsIterator = struct {
     scanner: Scanner,
-    specs: []const OptionSpec,
+    options: []Option,
 
     /// Returns next option, skipping operands. Returns null when no options remain.
     /// Use this to process all options before handling operands.
@@ -175,14 +192,14 @@ pub const ArgsIterator = struct {
             switch (tok) {
                 .operand => continue,
                 .short => |s| {
-                    const spec = findShort(self.specs, s.char) orelse
+                    const option = findShortMut(self.options, s.char) orelse
                         return error.UnknownOption;
-                    return try self.consume(spec, s.value);
+                    return try self.consume(option, s.value);
                 },
                 .long => |l| {
-                    const spec = findLong(self.specs, l.name) orelse
+                    const option = findLongMut(self.options, l.name) orelse
                         return error.UnknownOption;
-                    return try self.consume(spec, l.value);
+                    return try self.consume(option, l.value);
                 },
             }
         }
@@ -190,21 +207,34 @@ pub const ArgsIterator = struct {
 
     /// Returns next operand, skipping options and their arguments.
     /// Call this after nextOption() returns null to process non-option arguments.
-    pub fn nextOperand(self: *ArgsIterator) OptionError!?[]const u8 {
+    pub fn nextOperand(self: *ArgsIterator) ?[]const u8 {
         while (true) {
             const tok = self.scanner.next() orelse return null;
 
             switch (tok) {
                 .operand => |op| return op,
+                // If there is no option with the given name
+                // it treats it as an operand.
+                // To avoid having invalid options treated as operands
+                // first traverse using nextOption(),
+                // which will return an error for invalid arguments.
+                // It also uses the arg_seen field from option.state
+                // (which is set by traversing the arguments with next() or nextOption())
+                // to determine if the next argument is an
+                // option-argument or not (if so it skips it)
                 .short => |s| {
-                    const spec = findShort(self.specs, s.char) orelse
-                        return error.UnknownOption;
-                    _ = try self.consume(spec, s.value);
+                    if (findShort(self.options, s.char)) |option| {
+                        if (option.def.arg != .none and !option.state.arg_seen) {
+                            _ = self.scanner.next(); // skip the option-argument
+                        }
+                    }
                 },
                 .long => |l| {
-                    const spec = findLong(self.specs, l.name) orelse
-                        return error.UnknownOption;
-                    _ = try self.consume(spec, l.value);
+                    if (findLong(self.options, l.name)) |option| {
+                        if (option.def.arg != .none and !option.state.arg_seen) {
+                            _ = self.scanner.next(); // skip the option-argument
+                        }
+                    }
                 },
             }
         }
@@ -218,45 +248,50 @@ pub const ArgsIterator = struct {
         switch (tok) {
             .operand => |op| return .{ .operand = op },
             .short => |s| {
-                const spec = findShort(self.specs, s.char) orelse
+                const option = findShortMut(self.options, s.char) orelse
                     return error.UnknownOption;
-                return .{ .option = try self.consume(spec, s.value) };
+                return .{ .option = try self.consume(option, s.value) };
             },
             .long => |l| {
-                const spec = findLong(self.specs, l.name) orelse
+                const option = findLongMut(self.options, l.name) orelse
                     return error.UnknownOption;
-                return .{ .option = try self.consume(spec, l.value) };
+                return .{ .option = try self.consume(option, l.value) };
             },
         }
     }
 
-    /// Handles option argument consumption based on ArgumentType.
+    /// Handles option argument consumption based on ArgMode.
     /// For optional arguments: tries --opt=val, then --opt val if next arg isn't an option.
     /// For required arguments: tries inline value, then next argument.
     fn consume(
         self: *ArgsIterator,
-        spec: *const OptionSpec,
+        option: *Option,
         inline_value: ?[]const u8,
     ) OptionError!ParsedOption {
-        switch (spec.arg) {
+        switch (option.def.arg) {
             .none => {
                 if (inline_value != null) return error.UnexpectedArgument;
-                return .{ .spec = spec, .argument = null };
+                return .{ .def = &option.def, .argument = null };
             },
 
             .required => {
                 if (inline_value) |v| {
-                    return .{ .spec = spec, .argument = v };
+                    option.state.arg_seen = true;
+                    return .{ .def = &option.def, .argument = v };
                 }
+
                 const next_arg = self.scanner.args.next() orelse
                     return error.MissingOptionArgument;
-                return .{ .spec = spec, .argument = next_arg };
+
+                option.state.arg_seen = false;
+                return .{ .def = &option.def, .argument = next_arg };
             },
 
             .optional => {
                 // Inline value (--opt=val) always works.
                 if (inline_value) |v| {
-                    return .{ .spec = spec, .argument = v };
+                    option.state.arg_seen = true;
+                    return .{ .def = &option.def, .argument = v };
                 }
 
                 // Try consuming next argument if it doesn't look like an option.
@@ -264,11 +299,12 @@ pub const ArgsIterator = struct {
                 if (self.scanner.peek()) |next_arg| {
                     if (!std.mem.startsWith(u8, next_arg, "-")) {
                         _ = self.scanner.args.next(); // Consume it
-                        return .{ .spec = spec, .argument = next_arg };
+                        option.state.arg_seen = false;
+                        return .{ .def = &option.def, .argument = next_arg };
                     }
                 }
 
-                return .{ .spec = spec, .argument = null };
+                return .{ .def = &option.def, .argument = null };
             },
         }
     }
@@ -276,16 +312,16 @@ pub const ArgsIterator = struct {
 
 /// Main entry point for argument parsing. Initialize once per program.
 pub const Args = struct {
-    specs: []const OptionSpec,
+    options: []Option,
     program_name: []const u8,
 
     /// Initializes argument parser. Extracts program name from argv[0].
-    pub fn init(specs: []const OptionSpec) !Args {
+    pub fn init(options: []Option) !Args {
         var args = std.process.args();
         const arg0 = args.next() orelse return error.NoProgramName;
         return .{
             .program_name = utils.basename(arg0),
-            .specs = specs,
+            .options = options,
         };
     }
 
@@ -295,24 +331,39 @@ pub const Args = struct {
     }
 
     /// Creates an iterator for processing arguments.
-    /// Create separate iterators for multiple passes.
+    /// Note: Despite taking *const self, this returns an iterator that can
+    /// modify option state. The options slice itself is shared, not copied.
     pub fn iterator(self: *const Args) !ArgsIterator {
         return .{
-            .scanner = try Scanner.init(self.specs),
-            .specs = self.specs,
+            .scanner = try Scanner.init(self.options),
+            .options = self.options,
         };
     }
 };
 
-fn findShort(specs: []const OptionSpec, char: u8) ?*const OptionSpec {
-    for (specs) |*s| if (s.short == char) return s;
+fn findShort(options: []const Option, char: u8) ?*const Option {
+    for (options) |*o| if (o.def.short == char) return o;
     return null;
 }
 
-fn findLong(specs: []const OptionSpec, name: []const u8) ?*const OptionSpec {
-    for (specs) |*s| {
-        if (s.long) |l| {
-            if (std.mem.eql(u8, l, name)) return s;
+fn findShortMut(options: []Option, char: u8) ?*Option {
+    for (options) |*o| if (o.def.short == char) return o;
+    return null;
+}
+
+fn findLong(options: []const Option, name: []const u8) ?*const Option {
+    for (options) |*o| {
+        if (o.def.long) |l| {
+            if (std.mem.eql(u8, l, name)) return o;
+        }
+    }
+    return null;
+}
+
+fn findLongMut(options: []Option, name: []const u8) ?*Option {
+    for (options) |*o| {
+        if (o.def.long) |l| {
+            if (std.mem.eql(u8, l, name)) return o;
         }
     }
     return null;
@@ -338,25 +389,26 @@ pub fn printError(writer: anytype, program_name: []const u8, err: OptionError) !
 
 /// Formats and prints help text for given option specifications.
 /// Output format: "  -s, --long <arg>\n      description"
-pub fn printHelp(writer: anytype, specs: []const OptionSpec) !void {
-    for (specs) |s| {
+pub fn printHelp(writer: anytype, options: []const Option) !void {
+    for (options) |o| {
+        const def = o.def;
         try writer.print("  ", .{});
 
-        if (s.short) |c| {
+        if (def.short) |c| {
             try writer.print("-{c}", .{c});
-            if (s.long != null) try writer.print(", ", .{});
+            if (def.long != null) try writer.print(", ", .{});
         }
 
-        if (s.long) |l| {
+        if (def.long) |l| {
             try writer.print("--{s}", .{l});
         }
 
-        switch (s.arg) {
+        switch (def.arg) {
             .required => try writer.print(" <arg>", .{}),
             .optional => try writer.print(" [arg]", .{}),
             .none => {},
         }
 
-        try writer.print("\n      {s}\n", .{s.help});
+        try writer.print("\n      {s}\n", .{def.help});
     }
 }

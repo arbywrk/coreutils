@@ -23,12 +23,12 @@ const args = @import("common/args.zig");
 const config = @import("common/config.zig");
 
 pub fn main() !u8 {
-    const specs = [_]args.OptionSpec{
-        .{ .short = 'p', .long = "parents", .help = "remove DIRECTORY and its ancestors; e.g., 'rmdir -p a/b/c' removes a/b/c, a/b, and a" },
-        .{ .short = 'v', .long = "verbose", .help = "output a diagnostic for every directory processed" },
-        .{ .long = "ignore-fail-on-non-empty", .help = "ignore each failure that is solely because a directory is non-empty" },
-        .{ .long = "help", .help = "display this help and exit" },
-        .{ .long = "version", .help = "output version information and exit" },
+    var options = [_]args.Option{
+        .{ .def = .{ .short = 'p', .long = "parents", .help = "remove DIRECTORY and its ancestors; e.g., 'rmdir -p a/b/c' removes a/b/c, a/b, and a" } },
+        .{ .def = .{ .short = 'v', .long = "verbose", .help = "output a diagnostic for every directory processed" } },
+        .{ .def = .{ .long = "ignore-fail-on-non-empty", .help = "ignore each failure that is solely because a directory is non-empty" } },
+        .{ .def = .{ .long = "help", .help = "display this help and exit" } },
+        .{ .def = .{ .long = "version", .help = "output version information and exit" } },
     };
 
     var stdout_writer = fs.File.stdout().writer(&.{});
@@ -36,7 +36,7 @@ pub fn main() !u8 {
     const stdout = &stdout_writer.interface;
     const stderr = &stderr_writer.interface;
 
-    var arguments = try args.Args.init(&specs);
+    const arguments = try args.Args.init(&options);
     const program_name = arguments.programName();
     var iter = try arguments.iterator();
 
@@ -51,7 +51,7 @@ pub fn main() !u8 {
         return config.EXIT_FAILURE;
     }) |opt| {
         if (opt.isLong("help")) {
-            try printHelp(stdout, program_name, &specs);
+            try printHelp(stdout, program_name, &options);
             return config.EXIT_SUCCESS;
         }
         if (opt.isLong("version")) {
@@ -72,7 +72,7 @@ pub fn main() !u8 {
     // reinit args iterator
     iter = try arguments.iterator();
 
-    while (try iter.nextOperand()) |dir_path| {
+    while (iter.nextOperand()) |dir_path| {
         had_operand = true;
 
         // Validate path before attempting removal
@@ -223,7 +223,7 @@ fn printRemovalError(
 fn printHelp(
     writer: anytype,
     program: []const u8,
-    specs: []const args.OptionSpec,
+    options: []const args.Option,
 ) !void {
     try writer.print(
         \\Usage: {s} [OPTION]... DIRECTORY...
@@ -233,5 +233,5 @@ fn printHelp(
         \\
     , .{program});
 
-    try args.printHelp(writer, specs);
+    try args.printHelp(writer, options);
 }

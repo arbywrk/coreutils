@@ -20,12 +20,12 @@ const args = @import("common/args.zig");
 const config = @import("common/config.zig");
 
 pub fn main() !u8 {
-    const specs = [_]args.OptionSpec{
-        .{ .long = "help", .help = "display this help and exit" },
-        .{ .long = "version", .help = "output version information and exit" },
+    var options = [_]args.Option{
+        .{ .def = .{ .long = "help", .help = "display this help and exit" } },
+        .{ .def = .{ .long = "version", .help = "output version information and exit" } },
     };
 
-    var arguments = try args.Args.init(&specs);
+    var arguments = try args.Args.init(&options);
     const program_name = arguments.programName();
     var iter = try arguments.iterator();
 
@@ -42,7 +42,7 @@ pub fn main() !u8 {
                 \\Options:
                 \\
             , .{ program_name, program_name });
-            try args.printHelp(stdout, &specs);
+            try args.printHelp(stdout, &options);
             return config.EXIT_SUCCESS;
         }
 
