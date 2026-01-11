@@ -17,34 +17,52 @@
 const std = @import("std");
 const version = @import("common/version.zig");
 const utils = @import("common/utils.zig");
+const args = @import("common/args.zig");
+const config = @import("common/config.zig");
 
 const StopOutput = error{StopOutput};
 
-pub fn main() !void {
-    var stdout_writer: std.fs.File.Writer = std.fs.File.stdout().writer(&.{});
-    const stdout: *std.Io.Writer = &stdout_writer.interface;
+pub fn main() !u8 {
+    var options = [_]args.Option{
+        .{ .def = .{ .long = "help", .help = "Display help and exit" } },
+        .{ .def = .{ .long = "version", .help = "Display version and exit" } },
+        .{ .def = .{ .short = 'n', .help = "Do not output a trailing newline" } },
+        .{ .def = .{ .short = 'e', .help = "Enable interpretation of backslash escapes" } },
+        .{ .def = .{ .short = 'E', .help = "Disable interpretation of backslash escapes (default)" } },
+    };
 
-    const args = try std.process.argsAlloc(std.heap.page_allocator);
-    defer std.process.argsFree(std.heap.page_allocator, args);
+    // Configure flags
+    var omit_newline: bool = false;
+    var escape: bool = false;
 
-    const program_name = utils.basename(args[0]);
+    // Configure arguments
+    const arguments = try args.Args.init(&options);
+    const program_name = arguments.programName();
 
-    // parse meta-flags
-    for (args[1..]) |arg| {
-        if (!std.mem.startsWith(u8, arg, "-")) {
-            continue;
+    // Configure stdio
+    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    const stdout = &stdout_writer.interface;
+    var stderr_writer = std.fs.File.stderr().writer(&.{});
+    const stderr = &stderr_writer.interface;
+
+    // Parese for position independed options
+    var argsIter = try arguments.iterator();
+    while (argsIter.nextOption() catch |err| {
+        try args.printError(stderr, program_name, err);
+        return config.EXIT_FAILURE;
+    }) |opt| {
+        if (opt.isLong("version")) {
+            try version.printVersion(stdout, program_name);
+            return config.EXIT_SUCCESS;
         }
 
-        if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
-            try version.printVersion(stdout, program_name);
-            return;
-        } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+        if (opt.isLong("help")) {
             const usage =
                 \\Usage: {s} [options] [string...]
                 \\
                 \\Options:
-                \\  -h, --help      Print this help and exit
-                \\  -v, --version   Print version and exit
+                \\  --help          Print this help and exit
+                \\  --version       Print version and exit
                 \\  -n              Do not output a trailing newline
                 \\  -e              Enable interpretation of backslash escapes
                 \\  -E              Disable interpretation of backslash escapes (default)
@@ -66,50 +84,52 @@ pub fn main() !void {
                 \\
             ;
             _ = try stdout.print(usage, .{program_name});
-            return;
+            return config.EXIT_SUCCESS;
+        }
+
+        if (opt.isShort('n')) {
+            omit_newline = true;
         }
     }
 
-    var add_newline = true;
-    var escape = false;
+    // reset argsIterator
+    argsIter = try arguments.iterator();
 
-    var i: usize = 1;
+    // print operands and parse escape sequence options
+    var print_space: bool = false;
+    while (argsIter.next() catch |err| {
+        try args.printError(stderr, program_name, err);
+        return config.EXIT_FAILURE;
+    }) |arg| {
+        switch (arg) {
+            .option => |opt| {
+                if (opt.isShort('e')) {
+                    escape = true;
+                } else if (opt.isShort('E')) {
+                    escape = false;
+                }
+            },
 
-    // parse flags
-    while (i < args.len and args[i].len > 0 and args[i][0] == '-') {
-        const a = args[i];
-        if (std.mem.eql(u8, a, "-n")) {
-            add_newline = false;
-        } else if (std.mem.eql(u8, a, "-e")) {
-            escape = true;
-        } else if (std.mem.eql(u8, a, "-E")) {
-            escape = false;
-        } else break;
-        i += 1;
-    }
+            .operand => |opr| {
+                if (print_space) try stdout.writeByte(' '); // Don't print space before the first operand
+                print_space = true;
 
-    // print arguments
-    var first = true;
-    while (i < args.len) {
-        if (!first) try stdout.writeByte(' ');
-        first = false;
-
-        if (escape) {
-            writeEscaped(stdout, args[i]) catch |err| switch (err) {
-                error.StopOutput => return, // No more printing (\c exit)
-                else => return err,
-            };
-        } else {
-            try stdout.writeAll(args[i]);
+                if (escape) {
+                    writeEscaped(stdout, opr) catch |err| switch (err) {
+                        error.StopOutput => return config.EXIT_SUCCESS, // No more printing (\c exit)
+                        else => return err,
+                    };
+                } else {
+                    try stdout.writeAll(opr);
+                }
+            },
         }
-
-        i += 1;
     }
 
-    if (add_newline)
+    if (!omit_newline)
         try stdout.writeByte('\n');
 
-    try stdout.flush();
+    return config.EXIT_SUCCESS;
 }
 
 fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
@@ -131,10 +151,10 @@ fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
             'a' => try w.writeByte(0x07),
             'b' => try w.writeByte(0x08),
             'c' => return StopOutput.StopOutput,
-            'e' => try w.writeByte(0x1B),
+            'e' => try w.writeByte(0x1B), // TODO: fix \e
             'f' => try w.writeByte(0x0C),
             'n' => try w.writeByte(0x0A),
-            'r' => try w.writeByte(0x0D),
+            'r' => try w.writeByte(0x0D), // TODO: fix \r
             't' => try w.writeByte(0x09),
             'v' => try w.writeByte(0x0B),
             '\\' => try w.writeByte('\\'),
@@ -162,6 +182,7 @@ fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
 }
 
 fn parseHex(s: []const u8, idx: usize) !std.meta.Tuple(&.{ u8, usize }) {
+    // TODO: needs fixing
     var i: usize = idx;
     var val: u8 = 0;
     var count: usize = 0;
@@ -173,6 +194,27 @@ fn parseHex(s: []const u8, idx: usize) !std.meta.Tuple(&.{ u8, usize }) {
         const b16_digit = try std.fmt.charToDigit(c, 16);
         val = val * 16 + b16_digit;
         i += 1;
+        count += 1;
+    }
+
+    return .{ @as(u8, val), @as(usize, i) };
+}
+
+fn parseOctal(s: []const u8, first: u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
+    // TODO: needs fixing
+    var i: usize = idx;
+    var val: u8 = first - '0';
+    var count: usize = 1;
+
+    while (i < s.len and count < 3) {
+        const c = s[i];
+
+        if (c < '0' or c > '7') break;
+
+        val = val * 8 + (c - '0');
+
+        i += 1;
+
         count += 1;
     }
 
