@@ -57,33 +57,7 @@ pub fn main() !u8 {
         }
 
         if (opt.isLong("help")) {
-            const usage =
-                \\Usage: {s} [options] [string...]
-                \\
-                \\Options:
-                \\  --help          Print this help and exit
-                \\  --version       Print version and exit
-                \\  -n              Do not output a trailing newline
-                \\  -e              Enable interpretation of backslash escapes
-                \\  -E              Disable interpretation of backslash escapes (default)
-                \\
-                \\If -e is in effect, the following sequences are recognized:
-                \\
-                \\  \\              backslash
-                \\  \a              alert (BEL)
-                \\  \b              backspace
-                \\  \c              produce no further output
-                \\  \e              escape
-                \\  \f              form feed
-                \\  \n              new line
-                \\  \r              carriage return
-                \\  \t              horizontal tab
-                \\  \v              vertical tab
-                \\  \0NNN           byte with octal value NNN (1 to 3 digits)
-                \\  \xHH            byte with hexadecimal value HH (1 to 2 digits)
-                \\
-            ;
-            _ = try stdout.print(usage, .{program_name});
+            try printHelp(stdout, program_name, &options);
             return config.EXIT_SUCCESS;
         }
 
@@ -111,7 +85,8 @@ pub fn main() !u8 {
             },
 
             .operand => |opr| {
-                if (print_space) try stdout.writeByte(' '); // Don't print space before the first operand
+                // Don't print space before the first operand
+                if (print_space) try stdout.writeByte(' ');
                 print_space = true;
 
                 if (escape) {
@@ -219,4 +194,38 @@ fn parseOctal(s: []const u8, first: u8, idx: usize) std.meta.Tuple(&.{ u8, usize
     }
 
     return .{ @as(u8, val), @as(usize, i) };
+}
+
+fn printHelp(
+    writer: anytype,
+    program_name: []const u8,
+    options: []const args.Option,
+) !void {
+    try writer.print(
+        \\Usage: {s} [options] [string...]
+        \\
+        \\Options:
+        \\
+    , .{program_name});
+
+    try args.printHelp(writer, options);
+
+    try writer.print(
+        \\
+        \\If -e is in effect, the following sequences are recognized:
+        \\
+        \\  \\              backslash
+        \\  \a              alert (BEL)
+        \\  \b              backspace
+        \\  \c              produce no further output
+        \\  \e              escape
+        \\  \f              form feed
+        \\  \n              new line
+        \\  \r              carriage return
+        \\  \t              horizontal tab
+        \\  \v              vertical tab
+        \\  \0NNN           byte with octal value NNN (1 to 3 digits)
+        \\  \xHH            byte with hexadecimal value HH (1 to 2 digits)
+        \\
+    , .{});
 }
