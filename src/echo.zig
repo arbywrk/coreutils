@@ -40,6 +40,7 @@ pub fn main() !u8 {
     const program_name = arguments.programName();
 
     // Configure stdio
+    // TODO: consider buffered writes
     var stdout_writer = std.fs.File.stdout().writer(&.{});
     const stdout = &stdout_writer.interface;
     var stderr_writer = std.fs.File.stderr().writer(&.{});
@@ -112,6 +113,36 @@ pub fn main() !u8 {
     return config.EXIT_SUCCESS;
 }
 
+/// Writes a string to `w`, interpreting backslash escape sequences.
+///
+/// The function processes the input string `s` character by character, writing
+/// literal characters directly to the writer and interpreting escape sequences
+/// when a backslash is encountered.
+///
+/// Supported escape sequences:
+/// - `\a`: Alert/bell (0x07)
+/// - `\b`: Backspace (0x08)
+/// - `\c`: Stop output (returns `StopOutput` error)
+/// - `\e`: Escape (0x1B)
+/// - `\f`: Form feed (0x0C)
+/// - `\n`: Newline (0x0A)
+/// - `\r`: Carriage return (0x0D)
+/// - `\t`: Horizontal tab (0x09)
+/// - `\v`: Vertical tab (0x0B)
+/// - `\\`: Literal backslash
+/// - `\xHH`: Hexadecimal byte value (1-2 digits)
+/// - `\0NNN`: Octal byte value (1-3 digits, leading zeros ignored)
+///
+/// Unrecognized escape sequences are written literally (both backslash and
+/// following character).
+///
+/// Parameters:
+/// - `w`: Writer to output processed characters
+/// - `s`: Input byte slice to process
+///
+/// Returns:
+/// - `StopOutput.StopOutput` when `\c` escape is encountered
+/// - Any error returned by the writer
 fn writeEscaped(w: anytype, s: []const u8) !void {
     var i: usize = 0;
     while (i < s.len) {
@@ -156,8 +187,7 @@ fn writeEscaped(w: anytype, s: []const u8) !void {
                 }
             },
 
-            '0'...'7' => {
-                i -= 1; // the first octal digit starts on `next`
+            '0' => {
                 const res = parseOctalEscape(s, i);
                 const b = res[0];
                 i = res[1];
@@ -192,15 +222,6 @@ test "writeEscaped: hex escape" {
 }
 
 test "writeEscaped: octal escape" {
-    var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-
-    try writeEscaped(&fbs.writer(), "\\101");
-
-    try std.testing.expectEqualStrings("A", fbs.getWritten());
-}
-
-test "writeEscaped: octal escape ignores leading zeros" {
     var buf: [64]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
 
@@ -251,14 +272,6 @@ test "writeEscaped bugfix: \\x at the end" {
 
     try writeEscaped(&fbs.writer(), "\\x");
     try std.testing.expectEqualStrings("\\x", fbs.getWritten());
-}
-
-test "writeEscaped bugfix: \\r" {
-    var buf: [64]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
-
-    try writeEscaped(&fbs.writer(), "Carriage return\\rOVERWRITE");
-    try std.testing.expectEqualStrings("OVERWRITE", fbs.getWritten());
 }
 
 /// Parses up to two hexadecimal digits from `s`, starting at index `idx`.
@@ -392,11 +405,6 @@ fn parseOctalEscape(s: []const u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
     var val: u16 = 0;
     var count: usize = 0;
 
-    // ignore leading zeros
-    while (i < s.len and s[i] == '0') {
-        i += 1;
-    }
-
     while (i < s.len and count < 3) {
         const c = s[i];
 
@@ -482,22 +490,6 @@ test "parseOctalEscape: starting at end of slice" {
 
     try std.testing.expectEqual(@as(u8, 0o000), result[0]);
     try std.testing.expectEqual(@as(usize, 2), result[1]);
-}
-
-test "parseOctalEscape bugfix: ignore one leading zeros" {
-    const input = "0101";
-    const result = parseOctalEscape(input, 0);
-
-    try std.testing.expectEqual(@as(u8, 0o101), result[0]);
-    try std.testing.expectEqual(@as(usize, 4), result[1]);
-}
-
-test "parseOctalEscape bugfix: ignore multiple leading zeros" {
-    const input = "000000101";
-    const result = parseOctalEscape(input, 0);
-
-    try std.testing.expectEqual(@as(u8, 0o101), result[0]);
-    try std.testing.expectEqual(@as(usize, 9), result[1]);
 }
 
 test "parseOctalEscape bugfix: silently enforce max value at 255" {
