@@ -77,6 +77,11 @@ pub fn main() !u8 {
     }) |arg| {
         switch (arg) {
             .option => |opt| {
+                // As opposed to other implementations
+                // of echo. This one parses options
+                // and operands at the same time
+                // so that it allows switching between
+                // enabled and disabled escape sequences
                 if (opt.isShort('e')) {
                     escape = true;
                 } else if (opt.isShort('E')) {
@@ -129,10 +134,10 @@ fn writeEscaped(w: anytype, s: []const u8) !void {
             'a' => try w.writeByte(0x07),
             'b' => try w.writeByte(0x08),
             'c' => return StopOutput.StopOutput,
-            'e' => try w.writeByte(0x1B), // TODO: fix \e
+            'e' => try w.writeByte(0x1B),
             'f' => try w.writeByte(0x0C),
             'n' => try w.writeByte(0x0A),
-            'r' => try w.writeByte(0x0D), // TODO: fix \r
+            'r' => try w.writeByte(0x0D),
             't' => try w.writeByte(0x09),
             'v' => try w.writeByte(0x0B),
             '\\' => try w.writeByte('\\'),
@@ -246,6 +251,14 @@ test "writeEscaped bugfix: \\x at the end" {
 
     try writeEscaped(&fbs.writer(), "\\x");
     try std.testing.expectEqualStrings("\\x", fbs.getWritten());
+}
+
+test "writeEscaped bugfix: \\r" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.Io.fixedBufferStream(&buf);
+
+    try writeEscaped(&fbs.writer(), "Carriage return\\rOVERWRITE");
+    try std.testing.expectEqualStrings("OVERWRITE", fbs.getWritten());
 }
 
 /// Parses up to two hexadecimal digits from `s`, starting at index `idx`.

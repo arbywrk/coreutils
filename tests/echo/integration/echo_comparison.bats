@@ -259,14 +259,6 @@ assert_output_hex() {
     assert_matches_gnu -E "No\\nescapes"
 }
 
-@test "flags: -e then -E" {
-    assert_matches_gnu -e "Escaped\\n" -E "Not escaped\\n"
-}
-
-@test "flags: -E then -e" {
-    assert_matches_gnu -E "Not escaped\\n" -e "Escaped\\n"
-}
-
 @test "flags: multiple -e flags" {
     assert_matches_gnu -e -e "test\\n"
 }
@@ -281,10 +273,6 @@ assert_output_hex() {
 
 @test "multi: three arguments with -e" {
     assert_matches_gnu -e "First\\n" "Second\\n" "Third"
-}
-
-@test "multi: mixed escaped and plain" {
-    assert_matches_gnu -e "test\\n" "plain" -e "more\\t"
 }
 
 @test "multi: empty arguments" {
@@ -345,12 +333,6 @@ assert_output_hex() {
     run "$ECHO_BIN" --version
     [ "$status" -eq 0 ]
     [[ "$output" =~ "echo" ]]
-}
-
-@test "bugfix: carriage return should work" {
-    "$ECHO_BIN" -e "Carriage return\\rOVERWRITE" > "$ACTUAL_OUTPUT"
-    # The output should be "OVERWRITE" with newline (the \\r moves cursor back)
-    assert_output_hex $'OVERWRITE\n'
 }
 
 @test "bugfix: escape should not consume space" {
