@@ -116,9 +116,12 @@ fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
             i += 1;
             continue;
         }
-        if (i + 1 >= s.len) break;
+        if (i + 1 > s.len) break;
 
-        const next = s[i + 1];
+        // if the next position is the end of the slice
+        // but there is a backslash at the end, we just print
+        // the backslash
+        const next = if (i + 1 < s.len) s[i + 1] else '\\';
         i += 2;
 
         // next is a runtime u8
