@@ -1,5 +1,5 @@
 //  true.zig, do nothing successfluly
-//  Copyright (C) 2025 Bogdan Rareș-Andrei
+//  Copyright (C) 2026 Bogdan Rareș-Andrei
 //
 //  This program is free software: you can redistribute it and/or modify
 //  it under the terms of the GNU General Public License as published by
