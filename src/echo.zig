@@ -285,8 +285,13 @@ test "parseHexEscape: starting at end of slice" {
 ///   - `next_index` is the index immediately after the last consumed character
 fn parseOctalEscape(s: []const u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
     var i: usize = idx;
-    var val: u8 = 0;
+    var val: u16 = 0;
     var count: usize = 0;
+
+    // ignore leading zeros
+    while (i < s.len and s[i] == '0') {
+        i += 1;
+    }
 
     while (i < s.len and count < 3) {
         const c = s[i];
@@ -300,7 +305,7 @@ fn parseOctalEscape(s: []const u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
         count += 1;
     }
 
-    return .{ @as(u8, val), @as(usize, i) };
+    return .{ @as(u8, @truncate(val)), @as(usize, i) };
 }
 
 test "parseOctalEscape: parses three octal digits" {
@@ -352,7 +357,7 @@ test "parseOctalEscape: returns zero when first character is not octal" {
 }
 
 test "parseOctalEscape: works with offset index" {
-    const input = "0077";
+    const input = "1177";
     const result = parseOctalEscape(input, 2);
 
     try std.testing.expectEqual(@as(u8, 0o077), result[0]);
@@ -373,6 +378,30 @@ test "parseOctalEscape: starting at end of slice" {
 
     try std.testing.expectEqual(@as(u8, 0o000), result[0]);
     try std.testing.expectEqual(@as(usize, 2), result[1]);
+}
+
+test "parseOctalEscape bugfix: ignore one leading zeros" {
+    const input = "0101";
+    const result = parseOctalEscape(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0o101), result[0]);
+    try std.testing.expectEqual(@as(usize, 4), result[1]);
+}
+
+test "parseOctalEscape bugfix: ignore multiple leading zeros" {
+    const input = "000000101";
+    const result = parseOctalEscape(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0o101), result[0]);
+    try std.testing.expectEqual(@as(usize, 9), result[1]);
+}
+
+test "parseOctalEscape bugfix: silently enforce max value at 255" {
+    const input = "777";
+    const result = parseOctalEscape(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0o377), result[0]);
+    try std.testing.expectEqual(@as(usize, 3), result[1]);
 }
 
 /// Prints the help menue for the echo program to `writer`.
