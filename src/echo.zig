@@ -122,7 +122,7 @@ pub fn main() !u8 {
 
 /// Writes a string to `writer`, interpreting backslash escape sequences.
 ///
-/// The function processes the input string `s` character by character, writing
+/// The function processes the input string `str` character by character, writing
 /// literal characters directly to the writer and interpreting escape sequences
 /// when a backslash is encountered.
 ///
@@ -145,26 +145,26 @@ pub fn main() !u8 {
 ///
 /// Parameters:
 /// - `writer`: Writer to output processed characters
-/// - `s`: Input byte slice to process
+/// - `str`: Input byte slice to process
 ///
 /// Returns:
 /// - `StopOutput.StopOutput` when `\c` escape is encountered
 /// - Any error returned by the writer
-fn writeEscaped(writer: anytype, s: []const u8) !void {
+fn writeEscaped(writer: anytype, str: []const u8) !void {
     var i: usize = 0;
-    while (i < s.len) {
-        const c = s[i];
+    while (i < str.len) {
+        const c = str[i];
         if (c != '\\') {
             try writer.writeByte(c);
             i += 1;
             continue;
         }
-        if (i + 1 > s.len) break;
+        if (i + 1 > str.len) break;
 
         // if the next position is the end of the slice
         // but there is a backslash at the end, we just print
         // the backslash
-        const next = if (i + 1 < s.len) s[i + 1] else '\\';
+        const next = if (i + 1 < str.len) str[i + 1] else '\\';
         i += 2;
 
         // `next` is a runtime u8
@@ -181,13 +181,13 @@ fn writeEscaped(writer: anytype, s: []const u8) !void {
             '\\' => try writer.writeByte('\\'),
 
             'x' => {
-                if (i >= s.len or !std.ascii.isHex(s[i])) {
+                if (i >= str.len or !std.ascii.isHex(str[i])) {
                     // TODO: get rid of duplicat logic
                     // no hex digits after \x
                     try writer.writeByte('\\');
                     try writer.writeByte(next);
                 } else {
-                    const res = parseHexEscape(s, i);
+                    const res = parseHexEscape(str, i);
                     const b = res[0];
                     i = res[1];
                     try writer.writeByte(b);
@@ -195,7 +195,7 @@ fn writeEscaped(writer: anytype, s: []const u8) !void {
             },
 
             '0' => {
-                const res = parseOctalEscape(s, i);
+                const res = parseOctalEscape(str, i);
                 const b = res[0];
                 i = res[1];
                 try writer.writeByte(b);
@@ -281,7 +281,7 @@ test "writeEscaped bugfix: \\x at the end" {
     try std.testing.expectEqualStrings("\\x", fbs.getWritten());
 }
 
-/// Parses up to two hexadecimal digits from `s`, starting at index `idx`.
+/// Parses up to two hexadecimal digits from `str`, starting at index `idx`.
 ///
 /// The function reads consecutive ASCII hexadecimal characters (`0-9`, `a-f`,
 /// `A-F`) beginning at `idx`, stopping when:
@@ -292,20 +292,20 @@ test "writeEscaped bugfix: \\x at the end" {
 /// The parsed value is accumulated as a base-16 number.
 ///
 /// Parameters:
-/// - `s`: Input byte slice containing ASCII characters
-/// - `idx`: Starting index in `s`
+/// - `str`: Input byte slice containing ASCII characters
+/// - `idx`: Starting index in `str`
 ///
 /// Returns:
 /// - A tuple `{ value, next_index }` where:
 ///   - `value` is the parsed hexadecimal value as `u8`
 ///   - `next_index` is the index immediately after the last consumed character
-fn parseHexEscape(s: []const u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
+fn parseHexEscape(str: []const u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
     var i: usize = idx;
     var val: u8 = 0;
     var count: usize = 0;
 
-    while (i < s.len and count < 2) {
-        const c = s[i];
+    while (i < str.len and count < 2) {
+        const c = str[i];
 
         const b16_digit = std.fmt.charToDigit(c, 16) catch |err| {
             switch (err) {
@@ -389,7 +389,7 @@ test "parseHexEscape: starting at end of slice" {
     try std.testing.expectEqual(@as(usize, 2), result[1]);
 }
 
-/// Parses up to three octal digits from `s`, starting at index `idx`.
+/// Parses up to three octal digits from `str`, starting at index `idx`.
 ///
 /// The function reads consecutive ASCII octal characters (`0-7`)
 /// beginning at index `idx`, and stopping when:
@@ -400,20 +400,20 @@ test "parseHexEscape: starting at end of slice" {
 /// The parsed value is accumulated as a base-8 number.
 ///
 /// Parameters:
-/// - `s`: Input byte slice containing ASCII characters
-/// - `idx`: Starting index in `s`
+/// - `str`: Input byte slice containing ASCII characters
+/// - `idx`: Starting index in `str`
 ///
 /// Returns:
 /// - A tuple `{ value, next_index }` where:
 ///   - `value` is the parsed octal value as `u8`
 ///   - `next_index` is the index immediately after the last consumed character
-fn parseOctalEscape(s: []const u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
+fn parseOctalEscape(str: []const u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
     var i: usize = idx;
     var val: u16 = 0;
     var count: usize = 0;
 
-    while (i < s.len and count < 3) {
-        const c = s[i];
+    while (i < str.len and count < 3) {
+        const c = str[i];
 
         if (c < '0' or c > '7') break;
 
