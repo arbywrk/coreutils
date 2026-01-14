@@ -40,8 +40,8 @@ pub fn main() !u8 {
     const program_name = arguments.programName();
 
     // Configure stdio
-    // TODO: consider buffered writes
-    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
     const stdout = &stdout_writer.interface;
     var stderr_writer = std.fs.File.stderr().writer(&.{});
     const stderr = &stderr_writer.interface;
@@ -54,11 +54,13 @@ pub fn main() !u8 {
     }) |opt| {
         if (opt.isLong("version")) {
             try version.printVersion(stdout, program_name);
+            try stdout.flush();
             return config.EXIT_SUCCESS;
         }
 
         if (opt.isLong("help")) {
             try printHelp(stdout, program_name, &options);
+            try stdout.flush();
             return config.EXIT_SUCCESS;
         }
 
@@ -97,7 +99,10 @@ pub fn main() !u8 {
 
                 if (escape) {
                     writeEscaped(stdout, opr) catch |err| switch (err) {
-                        error.StopOutput => return config.EXIT_SUCCESS, // No more printing (\c exit)
+                        error.StopOutput => {
+                            try stdout.flush();
+                            return config.EXIT_SUCCESS; // No more printing (\c exit)
+                        },
                         else => return err,
                     };
                 } else {
@@ -110,10 +115,12 @@ pub fn main() !u8 {
     if (!omit_newline)
         try stdout.writeByte('\n');
 
+    try stdout.flush();
+
     return config.EXIT_SUCCESS;
 }
 
-/// Writes a string to `w`, interpreting backslash escape sequences.
+/// Writes a string to `writer`, interpreting backslash escape sequences.
 ///
 /// The function processes the input string `s` character by character, writing
 /// literal characters directly to the writer and interpreting escape sequences
@@ -137,18 +144,18 @@ pub fn main() !u8 {
 /// following character).
 ///
 /// Parameters:
-/// - `w`: Writer to output processed characters
+/// - `writer`: Writer to output processed characters
 /// - `s`: Input byte slice to process
 ///
 /// Returns:
 /// - `StopOutput.StopOutput` when `\c` escape is encountered
 /// - Any error returned by the writer
-fn writeEscaped(w: anytype, s: []const u8) !void {
+fn writeEscaped(writer: anytype, s: []const u8) !void {
     var i: usize = 0;
     while (i < s.len) {
         const c = s[i];
         if (c != '\\') {
-            try w.writeByte(c);
+            try writer.writeByte(c);
             i += 1;
             continue;
         }
@@ -162,28 +169,28 @@ fn writeEscaped(w: anytype, s: []const u8) !void {
 
         // `next` is a runtime u8
         switch (next) {
-            'a' => try w.writeByte(0x07),
-            'b' => try w.writeByte(0x08),
+            'a' => try writer.writeByte(0x07),
+            'b' => try writer.writeByte(0x08),
             'c' => return StopOutput.StopOutput,
-            'e' => try w.writeByte(0x1B),
-            'f' => try w.writeByte(0x0C),
-            'n' => try w.writeByte(0x0A),
-            'r' => try w.writeByte(0x0D),
-            't' => try w.writeByte(0x09),
-            'v' => try w.writeByte(0x0B),
-            '\\' => try w.writeByte('\\'),
+            'e' => try writer.writeByte(0x1B),
+            'f' => try writer.writeByte(0x0C),
+            'n' => try writer.writeByte(0x0A),
+            'r' => try writer.writeByte(0x0D),
+            't' => try writer.writeByte(0x09),
+            'v' => try writer.writeByte(0x0B),
+            '\\' => try writer.writeByte('\\'),
 
             'x' => {
                 if (i >= s.len or !std.ascii.isHex(s[i])) {
                     // TODO: get rid of duplicat logic
                     // no hex digits after \x
-                    try w.writeByte('\\');
-                    try w.writeByte(next);
+                    try writer.writeByte('\\');
+                    try writer.writeByte(next);
                 } else {
                     const res = parseHexEscape(s, i);
                     const b = res[0];
                     i = res[1];
-                    try w.writeByte(b);
+                    try writer.writeByte(b);
                 }
             },
 
@@ -191,12 +198,12 @@ fn writeEscaped(w: anytype, s: []const u8) !void {
                 const res = parseOctalEscape(s, i);
                 const b = res[0];
                 i = res[1];
-                try w.writeByte(b);
+                try writer.writeByte(b);
             },
 
             else => {
-                try w.writeByte('\\');
-                try w.writeByte(next);
+                try writer.writeByte('\\');
+                try writer.writeByte(next);
             },
         }
     }
