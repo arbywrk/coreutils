@@ -107,7 +107,7 @@ pub fn main() !u8 {
     return config.EXIT_SUCCESS;
 }
 
-fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
+fn writeEscaped(w: anytype, s: []const u8) !void {
     var i: usize = 0;
     while (i < s.len) {
         const c = s[i];
@@ -124,7 +124,7 @@ fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
         const next = if (i + 1 < s.len) s[i + 1] else '\\';
         i += 2;
 
-        // next is a runtime u8
+        // `next` is a runtime u8
         switch (next) {
             'a' => try w.writeByte(0x07),
             'b' => try w.writeByte(0x08),
@@ -138,10 +138,17 @@ fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
             '\\' => try w.writeByte('\\'),
 
             'x' => {
-                const res = parseHexEscape(s, i);
-                const b = res[0];
-                i = res[1];
-                try w.writeByte(b);
+                if (i >= s.len or !std.ascii.isHex(s[i])) {
+                    // TODO: get rid of duplicat logic
+                    // no hex digits after \x
+                    try w.writeByte('\\');
+                    try w.writeByte(next);
+                } else {
+                    const res = parseHexEscape(s, i);
+                    const b = res[0];
+                    i = res[1];
+                    try w.writeByte(b);
+                }
             },
 
             '0'...'7' => {
@@ -158,6 +165,87 @@ fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
             },
         }
     }
+}
+
+test "writeEscaped: plain text" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    try writeEscaped(&w, "hello");
+
+    try std.testing.expectEqualStrings("hello", fbs.getWritten());
+}
+
+test "writeEscaped: hex escape" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    try writeEscaped(&fbs.writer(), "\\x41");
+
+    try std.testing.expectEqualStrings("A", fbs.getWritten());
+}
+
+test "writeEscaped: octal escape" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    try writeEscaped(&fbs.writer(), "\\101");
+
+    try std.testing.expectEqualStrings("A", fbs.getWritten());
+}
+
+test "writeEscaped: octal escape ignores leading zeros" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    try writeEscaped(&fbs.writer(), "\\0101");
+
+    try std.testing.expectEqualStrings("A", fbs.getWritten());
+}
+
+test "writeEscaped: unknown escape prints literally" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    try writeEscaped(&fbs.writer(), "\\q");
+
+    try std.testing.expectEqualStrings("\\q", fbs.getWritten());
+}
+
+test "writeEscaped bugfix: trailing backslash" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    try writeEscaped(&fbs.writer(), "\\");
+
+    try std.testing.expectEqualStrings("\\", fbs.getWritten());
+}
+
+test "writeEscaped: \\c stops output" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.Io.fixedBufferStream(&buf);
+
+    const err = writeEscaped(&fbs.writer(), "hi\\cbye");
+
+    try std.testing.expectError(StopOutput.StopOutput, err);
+    try std.testing.expectEqualStrings("hi", fbs.getWritten());
+}
+
+test "writeEscaped bugfix: \\x with no hex afterwards" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.Io.fixedBufferStream(&buf);
+
+    try writeEscaped(&fbs.writer(), "\\x something else");
+    try std.testing.expectEqualStrings("\\x something else", fbs.getWritten());
+}
+
+test "writeEscaped bugfix: \\x at the end" {
+    var buf: [64]u8 = undefined;
+    var fbs = std.Io.fixedBufferStream(&buf);
+
+    try writeEscaped(&fbs.writer(), "\\x");
+    try std.testing.expectEqualStrings("\\x", fbs.getWritten());
 }
 
 /// Parses up to two hexadecimal digits from `s`, starting at index `idx`.
@@ -417,7 +505,7 @@ test "parseOctalEscape bugfix: silently enforce max value at 255" {
 /// Errors:
 /// - Propagates any error returned by `common.args.printHelp` and `writer.print`
 fn printHelp(
-    writer: *std.Io.Writer,
+    writer: anytype,
     program_name: []const u8,
     options: []const args.Option,
 ) !void {
