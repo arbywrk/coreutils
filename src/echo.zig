@@ -135,7 +135,7 @@ fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
             '\\' => try w.writeByte('\\'),
 
             'x' => {
-                const res = try parseHex(s, i);
+                const res = try parseHexByte(s, i);
                 const b = res[0];
                 i = res[1];
                 try w.writeByte(b);
@@ -156,8 +156,28 @@ fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
     }
 }
 
-fn parseHex(s: []const u8, idx: usize) !std.meta.Tuple(&.{ u8, usize }) {
-    // TODO: needs fixing
+/// Parses up to two hexadecimal digits from `s`, starting at index `idx`.
+///
+/// The function reads consecutive ASCII hexadecimal characters (`0-9`, `a-f`,
+/// `A-F`) beginning at `idx`, stopping when:
+/// - A non-hex character is encountered
+/// - Two hex digits have been consumed
+/// - The end of the slice is reached
+///
+/// The parsed value is accumulated as a base-16 number.
+///
+/// Parameters:
+/// - `s`: Input byte slice containing ASCII characters
+/// - `idx`: Starting index in `s`
+///
+/// Returns:
+/// - A tuple `{ value, next_index }` where:
+///   - `value` is the parsed hexadecimal value as `u8`
+///   - `next_index` is the index immediately after the last consumed character
+///
+/// Errors:
+/// - Propagates any error returned by `std.fmt.charToDigit`
+fn parseHexByte(s: []const u8, idx: usize) !std.meta.Tuple(&.{ u8, usize }) {
     var i: usize = idx;
     var val: u8 = 0;
     var count: usize = 0;
@@ -173,6 +193,70 @@ fn parseHex(s: []const u8, idx: usize) !std.meta.Tuple(&.{ u8, usize }) {
     }
 
     return .{ @as(u8, val), @as(usize, i) };
+}
+
+test "parseHexByte parses two hex digits" {
+    const input = "1f";
+    const result = try parseHexByte(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0x1f), result[0]);
+    try std.testing.expectEqual(@as(usize, 2), result[1]);
+}
+
+test "parseHexByte parses one hex digit" {
+    const input = "a";
+    const result = try parseHexByte(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0x0a), result[0]);
+    try std.testing.expectEqual(@as(usize, 1), result[1]);
+}
+
+test "parseHexByte stops after two digits even if more are present" {
+    const input = "abcd";
+    const result = try parseHexByte(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0xab), result[0]);
+    try std.testing.expectEqual(@as(usize, 2), result[1]);
+}
+
+test "parseHexByte stops at non-hex character" {
+    const input = "1g3";
+    const result = try parseHexByte(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0x01), result[0]);
+    try std.testing.expectEqual(@as(usize, 1), result[1]);
+}
+
+test "parseHexByte returns zero when first character is not hex" {
+    const input = "xyz";
+    const result = try parseHexByte(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0x00), result[0]);
+    try std.testing.expectEqual(@as(usize, 0), result[1]);
+}
+
+test "parseHexByte works with offset index" {
+    const input = "00ff";
+    const result = try parseHexByte(input, 2);
+
+    try std.testing.expectEqual(@as(u8, 0xff), result[0]);
+    try std.testing.expectEqual(@as(usize, 4), result[1]);
+}
+
+test "parseHexByte handles end-of-slice safely" {
+    const input = "f";
+    const result = try parseHexByte(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0x0f), result[0]);
+    try std.testing.expectEqual(@as(usize, 1), result[1]);
+}
+
+test "parseHexByte starting at end of slice" {
+    const input = "ff";
+    const result = try parseHexByte(input, 2);
+
+    try std.testing.expectEqual(@as(u8, 0x00), result[0]);
+    try std.testing.expectEqual(@as(usize, 2), result[1]);
 }
 
 fn parseOctal(s: []const u8, first: u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
