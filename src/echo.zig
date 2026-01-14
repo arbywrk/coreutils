@@ -135,14 +135,15 @@ fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
             '\\' => try w.writeByte('\\'),
 
             'x' => {
-                const res = try parseHexByte(s, i);
+                const res = parseHexEscape(s, i);
                 const b = res[0];
                 i = res[1];
                 try w.writeByte(b);
             },
 
             '0'...'7' => {
-                const res = parseOctal(s, next, i);
+                i -= 1; // the first octal digit starts on `next`
+                const res = parseOctalEscape(s, i);
                 const b = res[0];
                 i = res[1];
                 try w.writeByte(b);
@@ -174,19 +175,24 @@ fn writeEscaped(w: *std.Io.Writer, s: []const u8) !void {
 /// - A tuple `{ value, next_index }` where:
 ///   - `value` is the parsed hexadecimal value as `u8`
 ///   - `next_index` is the index immediately after the last consumed character
-///
-/// Errors:
-/// - Propagates any error returned by `std.fmt.charToDigit`
-fn parseHexByte(s: []const u8, idx: usize) !std.meta.Tuple(&.{ u8, usize }) {
+fn parseHexEscape(s: []const u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
     var i: usize = idx;
     var val: u8 = 0;
     var count: usize = 0;
 
     while (i < s.len and count < 2) {
         const c = s[i];
-        if (!std.ascii.isHex(c)) break;
 
-        const b16_digit = try std.fmt.charToDigit(c, 16);
+        const b16_digit = std.fmt.charToDigit(c, 16) catch |err| {
+            switch (err) {
+                // using switch to make sure that the if the
+                // zig api changes for `charToDigit` it will
+                // be a compile error
+                error.InvalidCharacter => {
+                    break; // stop at the first non hex digit
+                },
+            }
+        };
         val = val * 16 + b16_digit;
         i += 1;
         count += 1;
@@ -195,75 +201,92 @@ fn parseHexByte(s: []const u8, idx: usize) !std.meta.Tuple(&.{ u8, usize }) {
     return .{ @as(u8, val), @as(usize, i) };
 }
 
-test "parseHexByte parses two hex digits" {
+test "parseHexEscape: parses two hex digits" {
     const input = "1f";
-    const result = try parseHexByte(input, 0);
+    const result = parseHexEscape(input, 0);
 
     try std.testing.expectEqual(@as(u8, 0x1f), result[0]);
     try std.testing.expectEqual(@as(usize, 2), result[1]);
 }
 
-test "parseHexByte parses one hex digit" {
+test "parseHexEscape: parses one hex digit" {
     const input = "a";
-    const result = try parseHexByte(input, 0);
+    const result = parseHexEscape(input, 0);
 
     try std.testing.expectEqual(@as(u8, 0x0a), result[0]);
     try std.testing.expectEqual(@as(usize, 1), result[1]);
 }
 
-test "parseHexByte stops after two digits even if more are present" {
+test "parseHexEscape: stops after two digits even if more are present" {
     const input = "abcd";
-    const result = try parseHexByte(input, 0);
+    const result = parseHexEscape(input, 0);
 
     try std.testing.expectEqual(@as(u8, 0xab), result[0]);
     try std.testing.expectEqual(@as(usize, 2), result[1]);
 }
 
-test "parseHexByte stops at non-hex character" {
+test "parseHexEscape: stops at non-hex character" {
     const input = "1g3";
-    const result = try parseHexByte(input, 0);
+    const result = parseHexEscape(input, 0);
 
     try std.testing.expectEqual(@as(u8, 0x01), result[0]);
     try std.testing.expectEqual(@as(usize, 1), result[1]);
 }
 
-test "parseHexByte returns zero when first character is not hex" {
+test "parseHexEscape: returns zero when first character is not hex" {
     const input = "xyz";
-    const result = try parseHexByte(input, 0);
+    const result = parseHexEscape(input, 0);
 
     try std.testing.expectEqual(@as(u8, 0x00), result[0]);
     try std.testing.expectEqual(@as(usize, 0), result[1]);
 }
 
-test "parseHexByte works with offset index" {
+test "parseHexEscape: works with offset index" {
     const input = "00ff";
-    const result = try parseHexByte(input, 2);
+    const result = parseHexEscape(input, 2);
 
     try std.testing.expectEqual(@as(u8, 0xff), result[0]);
     try std.testing.expectEqual(@as(usize, 4), result[1]);
 }
 
-test "parseHexByte handles end-of-slice safely" {
+test "parseHexEscape: handles end-of-slice safely" {
     const input = "f";
-    const result = try parseHexByte(input, 0);
+    const result = parseHexEscape(input, 0);
 
     try std.testing.expectEqual(@as(u8, 0x0f), result[0]);
     try std.testing.expectEqual(@as(usize, 1), result[1]);
 }
 
-test "parseHexByte starting at end of slice" {
+test "parseHexEscape: starting at end of slice" {
     const input = "ff";
-    const result = try parseHexByte(input, 2);
+    const result = parseHexEscape(input, 2);
 
     try std.testing.expectEqual(@as(u8, 0x00), result[0]);
     try std.testing.expectEqual(@as(usize, 2), result[1]);
 }
 
-fn parseOctal(s: []const u8, first: u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
-    // TODO: needs fixing
+/// Parses up to three octal digits from `s`, starting at index `idx`.
+///
+/// The function reads consecutive ASCII octal characters (`0-7`)
+/// beginning at index `idx`, and stopping when:
+/// - A non-octal character is encountered
+/// - Three octal digits have been consumed
+/// - The end of the slice is reached
+///
+/// The parsed value is accumulated as a base-8 number.
+///
+/// Parameters:
+/// - `s`: Input byte slice containing ASCII characters
+/// - `idx`: Starting index in `s`
+///
+/// Returns:
+/// - A tuple `{ value, next_index }` where:
+///   - `value` is the parsed octal value as `u8`
+///   - `next_index` is the index immediately after the last consumed character
+fn parseOctalEscape(s: []const u8, idx: usize) std.meta.Tuple(&.{ u8, usize }) {
     var i: usize = idx;
-    var val: u8 = first - '0';
-    var count: usize = 1;
+    var val: u8 = 0;
+    var count: usize = 0;
 
     while (i < s.len and count < 3) {
         const c = s[i];
@@ -280,8 +303,89 @@ fn parseOctal(s: []const u8, first: u8, idx: usize) std.meta.Tuple(&.{ u8, usize
     return .{ @as(u8, val), @as(usize, i) };
 }
 
+test "parseOctalEscape: parses three octal digits" {
+    const input = "341";
+    const result = parseOctalEscape(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0o341), result[0]);
+    try std.testing.expectEqual(@as(usize, 3), result[1]);
+}
+
+test "parseOctalEscape: parses two octal digits" {
+    const input = "71";
+    const result = parseOctalEscape(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0o071), result[0]);
+    try std.testing.expectEqual(@as(usize, 2), result[1]);
+}
+
+test "parseOctalEscape: parses one octal digit" {
+    const input = "5";
+    const result = parseOctalEscape(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0o005), result[0]);
+    try std.testing.expectEqual(@as(usize, 1), result[1]);
+}
+
+test "parseOctalEscape: stops after three digits even if more are present" {
+    const input = "3654321";
+    const result = parseOctalEscape(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0o365), result[0]);
+    try std.testing.expectEqual(@as(usize, 3), result[1]);
+}
+
+test "parseOctalEscape: stops at non-octal character" {
+    const input = "183";
+    const result = parseOctalEscape(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0o001), result[0]);
+    try std.testing.expectEqual(@as(usize, 1), result[1]);
+}
+
+test "parseOctalEscape: returns zero when first character is not octal" {
+    const input = "xyz";
+    const result = parseOctalEscape(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0o000), result[0]);
+    try std.testing.expectEqual(@as(usize, 0), result[1]);
+}
+
+test "parseOctalEscape: works with offset index" {
+    const input = "0077";
+    const result = parseOctalEscape(input, 2);
+
+    try std.testing.expectEqual(@as(u8, 0o077), result[0]);
+    try std.testing.expectEqual(@as(usize, 4), result[1]);
+}
+
+test "parseOctalEscape: handles end-of-slice safely" {
+    const input = "7";
+    const result = parseOctalEscape(input, 0);
+
+    try std.testing.expectEqual(@as(u8, 0o007), result[0]);
+    try std.testing.expectEqual(@as(usize, 1), result[1]);
+}
+
+test "parseOctalEscape: starting at end of slice" {
+    const input = "77";
+    const result = parseOctalEscape(input, 2);
+
+    try std.testing.expectEqual(@as(u8, 0o000), result[0]);
+    try std.testing.expectEqual(@as(usize, 2), result[1]);
+}
+
+/// Prints the help menue for the echo program to `writer`.
+///
+/// Parameters:
+/// - `writter`: the writer to use for printing the help message
+/// - `program_name`: the name of the actual binary (for dynamic names inside the help menu)
+/// - `options`: array of options that the echo program supports
+///
+/// Errors:
+/// - Propagates any error returned by `common.args.printHelp` and `writer.print`
 fn printHelp(
-    writer: anytype,
+    writer: *std.Io.Writer,
     program_name: []const u8,
     options: []const args.Option,
 ) !void {
