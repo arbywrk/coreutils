@@ -19,7 +19,6 @@ const config = @import("../common/config.zig");
 const version = @import("../common/version.zig");
 
 pub const Help = struct {
-    /// Usage format string. Use `{s}` for the program name.
     usage: []const u8,
     /// Optional description shown after usage.
     description: []const u8 = "",
