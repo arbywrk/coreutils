@@ -18,27 +18,48 @@ const std = @import("std");
 const fs = std.fs;
 
 const utils = @import("common/utils.zig");
-const version = @import("common/version.zig");
-const args = @import("common/args.zig");
+const cli = @import("cli/mod.zig");
 const config = @import("common/config.zig");
+const validators = @import("common/validators.zig");
+
+// Canonical option definitions for this util.
+const CliOptions = cli.defineOptions(&.{
+    .{
+        .name = "parents",
+        .short = 'p',
+        .long = "parents",
+        .help = "remove DIRECTORY and its ancestors; e.g., 'rmdir -p a/b/c' removes a/b/c, a/b, and a",
+    },
+    .{
+        .name = "verbose",
+        .short = 'v',
+        .long = "verbose",
+        .help = "output a diagnostic for every directory processed",
+    },
+    .{
+        .name = "ignore_fail_on_non_empty",
+        .long = "ignore-fail-on-non-empty",
+        .help = "ignore each failure that is solely because a directory is non-empty",
+    },
+    cli.standard.defaultHelp,
+    cli.standard.defaultVersion,
+});
+
+const Help = cli.Help{
+    .usage = "Usage: {s} [OPTION]... DIRECTORY...\n",
+    .description = "Remove the DIRECTORY(ies), if they are empty.",
+};
 
 pub fn main() !u8 {
-    var options = [_]args.Option{
-        .{ .def = .{ .short = 'p', .long = "parents", .help = "remove DIRECTORY and its ancestors; e.g., 'rmdir -p a/b/c' removes a/b/c, a/b, and a" } },
-        .{ .def = .{ .short = 'v', .long = "verbose", .help = "output a diagnostic for every directory processed" } },
-        .{ .def = .{ .long = "ignore-fail-on-non-empty", .help = "ignore each failure that is solely because a directory is non-empty" } },
-        .{ .def = .{ .long = "help", .help = "display this help and exit" } },
-        .{ .def = .{ .long = "version", .help = "output version information and exit" } },
-    };
-
     var stdout_writer = fs.File.stdout().writer(&.{});
     var stderr_writer = fs.File.stderr().writer(&.{});
     const stdout = &stdout_writer.interface;
     const stderr = &stderr_writer.interface;
 
-    const arguments = try args.Args.init(&options);
-    const program_name = arguments.programName();
-    var iter = try arguments.iterator();
+    var ctx: CliOptions = undefined;
+    try ctx.init();
+    const program_name = ctx.args.programName();
+    var iter = try ctx.args.iterator();
 
     // Configuration flags
     var remove_parents = false;
@@ -47,39 +68,54 @@ pub fn main() !u8 {
 
     // Process all options
     while (iter.nextOption() catch |err| {
-        try args.printError(stderr, program_name, err);
+        try cli.printError(stderr, program_name, err);
         return config.EXIT_FAILURE;
     }) |opt| {
-        if (opt.isLong("help")) {
-            try printHelp(stdout, program_name, &options);
-            return config.EXIT_SUCCESS;
+        if (try cli.handleStandardOption(
+            &ctx,
+            opt,
+            stdout,
+            program_name,
+            Help,
+            ctx.entriesSlice(),
+            .{ .help = CliOptions.Option.help, .version = CliOptions.Option.version },
+        )) |exit_code| return exit_code;
+
+        switch (ctx.optionOf(opt)) {
+            CliOptions.Option.ignore_fail_on_non_empty => ignore_non_empty = true,
+            CliOptions.Option.parents => remove_parents = true,
+            CliOptions.Option.verbose => verbose = true,
+            CliOptions.Option.help,
+            CliOptions.Option.version,
+            => unreachable,
         }
-        if (opt.isLong("version")) {
-            try version.printVersion(stdout, program_name);
-            return config.EXIT_SUCCESS;
-        }
-        if (opt.isLong("ignore-fail-on-non-empty")) {
-            ignore_non_empty = true;
-        }
-        if (opt.isShort('p')) remove_parents = true;
-        if (opt.isShort('v')) verbose = true;
     }
 
     // Process operands (directory paths)
     var had_operand = false;
-    var exit_status = config.EXIT_SUCCESS;
+    var exit_status: u8 = config.EXIT_SUCCESS;
 
-    // reinit args iterator
-    iter = try arguments.iterator();
+    // Re-init iterator before scanning operands.
+    iter = try ctx.args.iterator();
 
     while (iter.nextOperand()) |dir_path| {
         had_operand = true;
 
-        // Validate path before attempting removal
-        if (!validatePath(stderr, program_name, dir_path)) {
+        validators.validateDirPath(dir_path) catch |err| {
+            const message = switch (err) {
+                error.EmptyPath,
+                error.DotPath,
+                error.DotDotPath,
+                error.TrailingSlash,
+                => "Invalid argument",
+            };
+            try stderr.print(
+                "{s}: failed to remove '{s}': {s}\n",
+                .{ program_name, dir_path, message },
+            );
             exit_status = config.EXIT_FAILURE;
             continue;
-        }
+        };
 
         // Attempt removal
         if (!try removeDirectory(stdout, stderr, program_name, dir_path, .{
@@ -107,31 +143,6 @@ const RemoveOptions = struct {
     verbose: bool,
     ignore_non_empty: bool,
 };
-
-/// Validates directory path for common errors. Returns false if invalid.
-fn validatePath(stderr: anytype, program_name: []const u8, path: []const u8) bool {
-    if (path.len == 0) return false;
-
-    // Reject "." and ".."
-    if (std.mem.eql(u8, path, ".") or std.mem.eql(u8, path, "..")) {
-        stderr.print(
-            "{s}: failed to remove '{s}': Invalid argument\n",
-            .{ program_name, path },
-        ) catch {};
-        return false;
-    }
-
-    // Reject paths ending with slash
-    if (std.mem.endsWith(u8, path, "/")) {
-        stderr.print(
-            "{s}: failed to remove '{s}': Invalid argument\n",
-            .{ program_name, path },
-        ) catch {};
-        return false;
-    }
-
-    return true;
-}
 
 /// Removes directory and optionally its parents. Returns true on success.
 fn removeDirectory(
@@ -220,18 +231,18 @@ fn printRemovalError(
     );
 }
 
-fn printHelp(
-    writer: anytype,
-    program: []const u8,
-    options: []const args.Option,
-) !void {
-    try writer.print(
-        \\Usage: {s} [OPTION]... DIRECTORY...
-        \\Remove the DIRECTORY(ies), if they are empty.
-        \\
-        \\Options:
-        \\
-    , .{program});
-
-    try args.printHelp(writer, options);
-}
+// fn printHelp(
+//     writer: anytype,
+//     program: []const u8,
+//     options: []const args.Option,
+// ) !void {
+//     try writer.print(
+//         \\Usage: {s} [OPTION]... DIRECTORY...
+//         \\Remove the DIRECTORY(ies), if they are empty.
+//         \\
+//         \\Options:
+//         \\
+//     , .{program});
+//
+//     try args.printHelp(writer, options);
+// }

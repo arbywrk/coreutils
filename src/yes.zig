@@ -15,9 +15,23 @@
 //  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
 const std = @import("std");
+const cli = @import("cli/mod.zig");
+const config = @import("common/config.zig");
 const posix = std.posix;
 
-pub fn main() !void {
+const CliOptions = cli.defineOptions(&.{
+    cli.standard.helpOption('h', "Display this help and exit"),
+    cli.standard.versionOption('v', "Output version information and exit"),
+});
+
+const Help = cli.Help{
+    .usage =
+        \\Usage: {s} [string...]
+        \\       {s} OPTION
+    ,
+};
+
+pub fn main() !u8 {
     const allocator = std.heap.page_allocator;
     const STDOUT = 1;
 
@@ -25,65 +39,62 @@ pub fn main() !void {
     var stderr_buffer: [256]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
+    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    const stdout = &stdout_writer.interface;
 
-    // Get command line arguments
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    var ctx: CliOptions = undefined;
+    try ctx.init();
+    const program_name = ctx.args.programName();
 
-    // Handle meta-options
-    for (args[1..]) |arg| {
-        if (std.mem.startsWith(u8, arg, "-")) {
-            if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--version")) {
-                const ver_mes = "{s}: 1.0.0\n";
-                const ver_str = try std.fmt.allocPrint(allocator, ver_mes, .{args[0]});
-                defer allocator.free(ver_str);
-                _ = try posix.write(STDOUT, ver_str);
-                return;
-            } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
-                const usage =
-                    \\Usage: yes [string...]
-                    \\       yes <option>
-                    \\
-                    \\Options:
-                    \\  -h, --help      Display this help and exit
-                    \\  -v, --version   Output version information and exit
-                    \\
-                ;
-                _ = try posix.write(STDOUT, usage);
-                return;
-            } else {
-                try stderr.print("{s}: Invalid option: {s}\nTry '{s} --help' for more information.\n", .{ args[0], arg, args[0] });
-                try stderr.flush();
-                return;
-            }
-        }
+    var iter = try ctx.args.iterator();
+    while (iter.nextOption() catch |err| {
+        try cli.printError(stderr, program_name, err);
+        try stderr.flush();
+        return config.EXIT_FAILURE;
+    }) |opt| {
+        if (try cli.handleStandardOption(
+            &ctx,
+            opt,
+            stdout,
+            program_name,
+            Help,
+            ctx.entriesSlice(),
+            .{ .help = CliOptions.Option.help, .version = CliOptions.Option.version },
+        )) |exit_code| return exit_code;
     }
 
     // Build the repeated line
     var line_buf: []u8 = undefined;
-    if (args.len > 1) {
-        // Join all args with spaces + newline
-        var total_len: usize = 0;
-        for (args[1..]) |arg| total_len += arg.len;
-        total_len += args.len - 2; // spaces
+    var operand_count: usize = 0;
+    var total_len: usize = 0;
+
+    iter = try ctx.args.iterator();
+    while (iter.nextOperand()) |arg| {
+        operand_count += 1;
+        total_len += arg.len;
+    }
+
+    if (operand_count == 0) {
+        line_buf = try allocator.alloc(u8, 2);
+        line_buf[0] = 'y';
+        line_buf[1] = '\n';
+    } else {
+        total_len += operand_count - 1; // spaces
         total_len += 1; // newline
 
         line_buf = try allocator.alloc(u8, total_len);
         var pos: usize = 0;
-        for (args[1..], 0..) |arg, i| {
+
+        iter = try ctx.args.iterator();
+        while (iter.nextOperand()) |arg| {
             @memcpy(line_buf[pos..][0..arg.len], arg);
             pos += arg.len;
-            if (i < args.len - 2) {
+            if (pos + 1 < total_len) {
                 line_buf[pos] = ' ';
                 pos += 1;
             }
         }
         line_buf[pos] = '\n';
-    } else {
-        // Default
-        line_buf = try allocator.alloc(u8, 2);
-        line_buf[0] = 'y';
-        line_buf[1] = '\n';
     }
 
     // Precompute a large buffer to minimize syscalls (32 KB)
@@ -100,4 +111,6 @@ pub fn main() !void {
     while (true) {
         _ = try posix.write(STDOUT, slice);
     }
+
+    return config.EXIT_SUCCESS;
 }
