@@ -1,4 +1,4 @@
-//  config.zig, general configuration and values
+//  validators.zig, reusable validation helpers
 //  Copyright (C) 2026 Bogdan Rareș-Andrei
 //
 //  This program is free software: you can redistribute it and/or modify
@@ -14,5 +14,19 @@
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
-pub const EXIT_SUCCESS: u8 = 0;
-pub const EXIT_FAILURE: u8 = 1;
+const std = @import("std");
+
+pub const DirPathError = error{
+    EmptyPath,
+    DotPath,
+    DotDotPath,
+    TrailingSlash,
+};
+
+/// Validate directory path for common errors.
+pub fn validateDirPath(path: []const u8) DirPathError!void {
+    if (path.len == 0) return error.EmptyPath;
+    if (std.mem.eql(u8, path, ".")) return error.DotPath;
+    if (std.mem.eql(u8, path, "..")) return error.DotDotPath;
+    if (std.mem.endsWith(u8, path, "/")) return error.TrailingSlash;
+}

@@ -15,33 +15,48 @@
 //  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
 const std = @import("std");
+const cli = @import("cli/mod.zig");
 const config = @import("common/config.zig");
-const arguments = @import("common/args.zig");
-const posix = std.posix;
+
+const CliOptions = cli.defineOptions(&.{
+    cli.standard.defaultHelp,
+    cli.standard.defaultVersion,
+});
+
+const Help = cli.Help{
+    .usage = "Usage: {s}\n",
+    .description = "Write the hostname to standard output.",
+};
 
 pub fn main() !u8 {
     var stdout_writer = std.fs.File.stdout().writer(&.{});
-    // var stderr_writer = std.fs.File.stderr().writer(&.{});
+    var stderr_writer = std.fs.File.stderr().writer(&.{});
     const stdout = &stdout_writer.interface;
-    // const stderr = &stderr_writer.interface;
+    const stderr = &stderr_writer.interface;
 
-    // const specs = [_]arguments.OptionSpec{
-    //     .{ .short = 'a', .long = "aliases", .help = "alias names" },
-    //     .{ .short = 'd', .long = "domain", .help = "DNS domain name" },
-    //     .{ .short = 'f', .long = "fqdn", .help = "DNS host name of FQDN" },
-    //     .{ .short = 'f', .long = "long", .help = "DNS host name of FQDN" },
-    //     .{ .short = 'F', .long = "file", .arg = .required, .help = "set host name or NIS domain name from FILE" },
-    //     .{ .short = 'i', .long = "ip-addresses", .help = "addresses for the host name" },
-    //     .{ .short = 's', .long = "short", .help = "short host name" },
-    //     .{ .short = 'y', .long = "yp", .help = "NIS/YP domain name" },
-    //     .{ .short = 'y', .long = "nis", .help = "NIS/YP domain name" },
-    //     .{ .long = "help", .help = "display this help and exit" },
-    //     .{ .long = "version", .help = "output version information and exit" },
-    // };
+    var ctx: CliOptions = undefined;
+    try ctx.init();
+    const program_name = ctx.args.programName();
+    var iter = try ctx.args.iterator();
 
-    var hostname_buffer: [posix.HOST_NAME_MAX]u8 = undefined;
-    _ = try posix.gethostname(&hostname_buffer);
-    const hostname_len = std.mem.indexOfScalar(u8, &hostname_buffer, 0) orelse posix.HOST_NAME_MAX;
+    while (iter.nextOption() catch |err| {
+        try cli.printError(stderr, program_name, err);
+        return config.EXIT_FAILURE;
+    }) |opt| {
+        if (try cli.handleStandardOption(
+            &ctx,
+            opt,
+            stdout,
+            program_name,
+            Help,
+            ctx.entriesSlice(),
+            .{ .help = CliOptions.Option.help, .version = CliOptions.Option.version },
+        )) |exit_code| return exit_code;
+    }
+
+    var hostname_buffer: [std.posix.HOST_NAME_MAX]u8 = undefined;
+    _ = try std.posix.gethostname(&hostname_buffer);
+    const hostname_len = std.mem.indexOfScalar(u8, &hostname_buffer, 0) orelse std.posix.HOST_NAME_MAX;
     try stdout.print("{s}\n", .{hostname_buffer[0..hostname_len]});
     return config.EXIT_SUCCESS;
 }

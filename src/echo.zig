@@ -15,29 +15,48 @@
 //  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
 const std = @import("std");
-const version = @import("common/version.zig");
-const utils = @import("common/utils.zig");
-const args = @import("common/args.zig");
+const cli = @import("cli/mod.zig");
 const config = @import("common/config.zig");
 
 const StopOutput = error{StopOutput};
 
-pub fn main() !u8 {
-    var options = [_]args.Option{
-        .{ .def = .{ .long = "help", .help = "Display help and exit" } },
-        .{ .def = .{ .long = "version", .help = "Display version and exit" } },
-        .{ .def = .{ .short = 'n', .help = "Do not output a trailing newline" } },
-        .{ .def = .{ .short = 'e', .help = "Enable interpretation of backslash escapes" } },
-        .{ .def = .{ .short = 'E', .help = "Disable interpretation of backslash escapes (default)" } },
-    };
+const CliOptions = cli.defineOptions(&.{
+    cli.standard.helpOption(null, "Display help and exit"),
+    cli.standard.versionOption(null, "Display version and exit"),
+    .{ .name = "no_newline", .short = 'n', .help = "Do not output a trailing newline" },
+    .{ .name = "escape", .short = 'e', .help = "Enable interpretation of backslash escapes" },
+    .{ .name = "no_escape", .short = 'E', .help = "Disable interpretation of backslash escapes (default)" },
+});
 
+const Help = cli.Help{
+    .usage = "Usage: {s} [options] [string...]\n",
+    .after_options =
+    \\If -e is in effect, the following sequences are recognized:
+    \\
+    \\  \               backslash
+    \\  \a              alert (BEL)
+    \\  \b              backspace
+    \\  \c              produce no further output
+    \\  \e              escape
+    \\  \f              form feed
+    \\  \n              new line
+    \\  \r              carriage return
+    \\  \t              horizontal tab
+    \\  \v              vertical tab
+    \\  \0NNN           byte with octal value NNN (1 to 3 digits)
+    \\  \xHH            byte with hexadecimal value HH (1 to 2 digits)
+    ,
+};
+
+pub fn main() !u8 {
     // Configure flags
     var omit_newline: bool = false;
     var escape: bool = false;
 
     // Configure arguments
-    const arguments = try args.Args.init(&options);
-    const program_name = arguments.programName();
+    var ctx: CliOptions = undefined;
+    try ctx.init();
+    const program_name = ctx.args.programName();
 
     // Configure stdio
     var stdout_buffer: [4096]u8 = undefined;
@@ -47,35 +66,40 @@ pub fn main() !u8 {
     const stderr = &stderr_writer.interface;
 
     // Parese for position independed options
-    var argsIter = try arguments.iterator();
+    var argsIter = try ctx.args.iterator();
     while (argsIter.nextOption() catch |err| {
-        try args.printError(stderr, program_name, err);
+        try cli.printError(stderr, program_name, err);
         return config.EXIT_FAILURE;
     }) |opt| {
-        if (opt.isLong("version")) {
-            try version.printVersion(stdout, program_name);
-            try stdout.flush();
-            return config.EXIT_SUCCESS;
+        if (try cli.handleStandardOption(
+            &ctx,
+            opt,
+            stdout,
+            program_name,
+            Help,
+            ctx.entriesSlice(),
+            .{ .help = CliOptions.Option.help, .version = CliOptions.Option.version },
+        )) |exit_code| {
+            return exit_code;
         }
 
-        if (opt.isLong("help")) {
-            try printHelp(stdout, program_name, &options);
-            try stdout.flush();
-            return config.EXIT_SUCCESS;
-        }
-
-        if (opt.isShort('n')) {
-            omit_newline = true;
+        switch (ctx.optionOf(opt)) {
+            CliOptions.Option.no_newline => omit_newline = true,
+            CliOptions.Option.escape,
+            CliOptions.Option.no_escape,
+            CliOptions.Option.help,
+            CliOptions.Option.version,
+            => {},
         }
     }
 
     // reset argsIterator
-    argsIter = try arguments.iterator();
+    argsIter = try ctx.args.iterator();
 
     // print operands and parse escape sequence options
     var print_space: bool = false;
     while (argsIter.next() catch |err| {
-        try args.printError(stderr, program_name, err);
+        try cli.printError(stderr, program_name, err);
         return config.EXIT_FAILURE;
     }) |arg| {
         switch (arg) {
@@ -85,10 +109,10 @@ pub fn main() !u8 {
                 // and operands at the same time
                 // so that it allows switching between
                 // enabled and disabled escape sequences
-                if (opt.isShort('e')) {
-                    escape = true;
-                } else if (opt.isShort('E')) {
-                    escape = false;
+                switch (ctx.optionOf(opt)) {
+                    CliOptions.Option.escape => escape = true,
+                    CliOptions.Option.no_escape => escape = false,
+                    else => {},
                 }
             },
 
@@ -114,8 +138,6 @@ pub fn main() !u8 {
 
     if (!omit_newline)
         try stdout.writeByte('\n');
-
-    try stdout.flush();
 
     return config.EXIT_SUCCESS;
 }
@@ -182,7 +204,7 @@ fn writeEscaped(writer: anytype, str: []const u8) !void {
 
             'x' => {
                 if (i >= str.len or !std.ascii.isHex(str[i])) {
-                    // TODO: get rid of duplicat logic
+                    // TODO: get rid of duplicat logic (line: 227)
                     // no hex digits after \x
                     try writer.writeByte('\\');
                     try writer.writeByte(next);
@@ -505,47 +527,4 @@ test "parseOctalEscape bugfix: silently enforce max value at 255" {
 
     try std.testing.expectEqual(@as(u8, 0o377), result[0]);
     try std.testing.expectEqual(@as(usize, 3), result[1]);
-}
-
-/// Prints the help menue for the echo program to `writer`.
-///
-/// Parameters:
-/// - `writter`: the writer to use for printing the help message
-/// - `program_name`: the name of the actual binary (for dynamic names inside the help menu)
-/// - `options`: array of options that the echo program supports
-///
-/// Errors:
-/// - Propagates any error returned by `common.args.printHelp` and `writer.print`
-fn printHelp(
-    writer: anytype,
-    program_name: []const u8,
-    options: []const args.Option,
-) !void {
-    try writer.print(
-        \\Usage: {s} [options] [string...]
-        \\
-        \\Options:
-        \\
-    , .{program_name});
-
-    try args.printHelp(writer, options);
-
-    try writer.print(
-        \\
-        \\If -e is in effect, the following sequences are recognized:
-        \\
-        \\  \\              backslash
-        \\  \a              alert (BEL)
-        \\  \b              backspace
-        \\  \c              produce no further output
-        \\  \e              escape
-        \\  \f              form feed
-        \\  \n              new line
-        \\  \r              carriage return
-        \\  \t              horizontal tab
-        \\  \v              vertical tab
-        \\  \0NNN           byte with octal value NNN (1 to 3 digits)
-        \\  \xHH            byte with hexadecimal value HH (1 to 2 digits)
-        \\
-    , .{});
 }

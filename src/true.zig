@@ -15,43 +15,46 @@
 //  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
 const std = @import("std");
-const version = @import("common/version.zig");
-const args = @import("common/args.zig");
+const cli = @import("cli/mod.zig");
 const config = @import("common/config.zig");
 
-pub fn main() !u8 {
-    var options = [_]args.Option{
-        .{ .def = .{ .long = "help", .help = "display this help and exit" } },
-        .{ .def = .{ .long = "version", .help = "output version information and exit" } },
-    };
+const CliOptions = cli.defineOptions(&.{
+    cli.standard.helpOption(null, "display this help and exit"),
+    cli.standard.versionOption(null, "output version information and exit"),
+});
 
-    const arguments = try args.Args.init(&options);
-    const program_name = arguments.programName();
-    var iter = try arguments.iterator();
+const Help = cli.Help{
+    .usage =
+        \\Usage: {s} [ignored command line arguments]
+        \\   or: {s} OPTION
+    ,
+    .description = "Exit with a status code indicating success.",
+};
+
+pub fn main() !u8 {
+    var ctx: CliOptions = undefined;
+    try ctx.init();
+    const program_name = ctx.args.programName();
+    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    var stderr_writer = std.fs.File.stderr().writer(&.{});
+    const stdout = &stdout_writer.interface;
+    const stderr = &stderr_writer.interface;
+    var iter = try ctx.args.iterator();
 
     // Check for --help or --version (all other arguments ignored)
-    while (try iter.nextOption()) |opt| {
-        if (opt.isLong("help")) {
-            var stdout_writer = std.fs.File.stdout().writer(&.{});
-            const stdout = &stdout_writer.interface;
-            try stdout.print(
-                \\Usage: {s} [ignored command line arguments]
-                \\   or: {s} OPTION
-                \\Exit with a status code indicating success.
-                \\
-                \\Options:
-                \\
-            , .{ program_name, program_name });
-            try args.printHelp(stdout, &options);
-            return config.EXIT_SUCCESS;
-        }
-
-        if (opt.isLong("version")) {
-            var stdout_writer = std.fs.File.stdout().writer(&.{});
-            const stdout = &stdout_writer.interface;
-            try version.printVersion(stdout, program_name);
-            return config.EXIT_SUCCESS;
-        }
+    while (iter.nextOption() catch |err| {
+        try cli.printError(stderr, program_name, err);
+        return config.EXIT_FAILURE;
+    }) |opt| {
+        if (try cli.handleStandardOption(
+            &ctx,
+            opt,
+            stdout,
+            program_name,
+            Help,
+            ctx.entriesSlice(),
+            .{ .help = CliOptions.Option.help, .version = CliOptions.Option.version },
+        )) |exit_code| return exit_code;
     }
 
     return config.EXIT_SUCCESS;
