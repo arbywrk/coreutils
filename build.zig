@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Allow an optional CLI parameter: `zig build utilname=<name>`
+    // Allow an optional CLI parameter: `zig build -Dutilname=<name>`
     const util_opt = b.option([]const u8, "utilname", "Build only a single utility");
 
     // Read from src/

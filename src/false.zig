@@ -1,4 +1,4 @@
-//  false.zig, do nothing unsuccessfluly
+//  false.zig, do nothing unsuccessfully
 //  Copyright (C) 2026 Bogdan Rareș-Andrei
 //
 //  This program is free software: you can redistribute it and/or modify
@@ -25,8 +25,8 @@ const CliOptions = cli.defineOptions(&.{
 
 const Help = cli.Help{
     .usage =
-        \\Usage: {s} [ignored command line arguments]
-        \\   or: {s} OPTION
+    \\Usage: {s} [ignored command line arguments]
+    \\   or: {s} OPTION
     ,
     .description = "Exit with a status code indicating failure.",
 };

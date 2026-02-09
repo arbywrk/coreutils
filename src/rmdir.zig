@@ -230,19 +230,3 @@ fn printRemovalError(
         .{ program_name, path, message },
     );
 }
-
-// fn printHelp(
-//     writer: anytype,
-//     program: []const u8,
-//     options: []const args.Option,
-// ) !void {
-//     try writer.print(
-//         \\Usage: {s} [OPTION]... DIRECTORY...
-//         \\Remove the DIRECTORY(ies), if they are empty.
-//         \\
-//         \\Options:
-//         \\
-//     , .{program});
-//
-//     try args.printHelp(writer, options);
-// }

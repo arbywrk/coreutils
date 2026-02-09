@@ -1,14 +1,15 @@
 # arbys-coreutils
 
-Collection of, _UNIX_ based; *file*, *shell* and *text manipulation* utilities, written in _*Zig*_. 
+Small collection of UNIX-style file, shell, and text utilities written in Zig.
 
-This is a work in progress.
+## Status
+Early-stage: interfaces and coverage are evolving. Contributions welcome.
 
 ## Available Utilities
 - rmdir
-- echo (incomplete)
-- yes (needs memory fixes)
-- hostname (no flags)
+- echo (partial feature coverage)
+- yes (memory usage improvements planned)
+- hostname (basic output only)
 - true
 - false
 
@@ -27,3 +28,7 @@ $ zig build -p <output_directory> -Dutilname=<util_name>
 # to run the tests
 $ zig test <path_to_src_file>
 ```
+
+## Roadmap
+- Add more tests
+- Implement more utils
